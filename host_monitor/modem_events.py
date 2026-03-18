@@ -75,7 +75,7 @@ class ModemEventsReader:
         self._q: queue.SimpleQueue[dict] = queue.SimpleQueue()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._status: dict = {"enabled": cfg.enabled, "port": cfg.port, "running": False}
+        self._status: dict = {"enabled": cfg.enabled, "running": False}
         self._last_err: str | None = None
 
     def start(self) -> None:
@@ -114,7 +114,6 @@ class ModemEventsReader:
                 ser = serial.Serial(p, baudrate=self._cfg.baud, timeout=1.0)
                 # Basic probe
                 _at_cmd(ser, "AT")
-                self._status["port"] = p
                 return ser
             except Exception as e:
                 last_exc = e

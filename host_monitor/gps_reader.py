@@ -106,7 +106,7 @@ class GpsReader:
 
     def status(self) -> dict:
         age_s = time.time() - self._last_line_ts if self._last_line_ts else None
-        return {"enabled": self._cfg.enabled, "port": self._cfg.port, "age_s": age_s}
+        return {"enabled": self._cfg.enabled, "age_s": age_s}
 
     def _open_serial(self) -> serial.Serial:
         timeout = 1.0
