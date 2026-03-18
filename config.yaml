@@ -1,0 +1,49 @@
+device:
+  id: "ISRK_Hozain_rasp"
+
+send:
+  url: "http://127.0.0.1:8000/telemetry"
+  interval_s: 0.5
+  timeout_s: 3.0
+  max_batch: 50
+
+buffer:
+  sqlite_path: "./data/buffer.sqlite3"
+  max_rows: 200000
+
+gps:
+  enabled: true
+  port: "/dev/ttyUSB1"
+  # If you don't know baud, keep null to auto-detect.
+  baud: null
+  baud_candidates: [9600, 19200, 38400, 57600, 115200]
+
+weight:
+  enabled: false
+  # Will be used when ADC HAT arrives. Keep disabled for now.
+  driver: "ads1263"
+  calibration_path: "./data/scale_calibration.json"
+  # If hardware isn't available, you can set simulate=true for testing.
+  simulate: true
+
+wifi:
+  enabled: true
+  # Preferred method for AP mode: hostapd_cli
+  hostapd_cli: "hostapd_cli"
+  # Fallback method: parse "ip neigh" and filter by interface
+  ap_interface: "wlan0"
+
+lte:
+  enabled: true
+  # Preferred: ModemManager (mmcli). If not installed, we'll try AT.
+  mmcli: "mmcli"
+  at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2"]
+  at_baud: 115200
+
+logging:
+  dir: "./logs"
+  file: "host_monitor.log"
+  level: "INFO"
+  max_bytes: 5000000
+  backup_count: 3
+

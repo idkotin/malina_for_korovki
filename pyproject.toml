@@ -1,0 +1,20 @@
+[project]
+name = "host-monitor"
+version = "0.1.0"
+description = "Raspberry Pi telemetry sender (GPS/LTE/weight/Wi-Fi clients) with SQLite buffering."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.27",
+  "pydantic>=2.6",
+  "pyyaml>=6.0",
+  "pyserial>=3.5",
+]
+
+[project.scripts]
+host-monitor = "host_monitor.main:main"
+host-monitor-calibrate = "host_monitor.calibrate:main"
+
+[tool.uv]
+dev-dependencies = []
+
