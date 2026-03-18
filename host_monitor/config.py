@@ -21,9 +21,16 @@ class SendCfg(BaseModel):
     max_batch: int = 50
 
 
+class EventsCfg(BaseModel):
+    url: str
+    timeout_s: float = 5.0
+    max_batch: int = 50
+
+
 class BufferCfg(BaseModel):
     sqlite_path: str = "./data/buffer.sqlite3"
     max_rows: int = 200000
+    max_rows_events: int = 50000
 
 
 class GpsCfg(BaseModel):
@@ -51,6 +58,7 @@ class LteCfg(BaseModel):
     mmcli: str = "mmcli"
     at_ports: list[str] = Field(default_factory=lambda: ["/dev/ttyUSB0", "/dev/ttyUSB2"])
     at_baud: int = 115200
+    events_port: str | None = None
 
 
 class LoggingCfg(BaseModel):
@@ -64,6 +72,7 @@ class LoggingCfg(BaseModel):
 class AppCfg(BaseModel):
     device: DeviceCfg
     send: SendCfg
+    events: EventsCfg
     buffer: BufferCfg = Field(default_factory=BufferCfg)
     gps: GpsCfg = Field(default_factory=GpsCfg)
     weight: WeightCfg = Field(default_factory=WeightCfg)

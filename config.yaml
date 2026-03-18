@@ -7,9 +7,15 @@ send:
   timeout_s: 3.0
   max_batch: 50
 
+events:
+  url: "http://127.0.0.1:8000/modem-events"
+  timeout_s: 5.0
+  max_batch: 50
+
 buffer:
   sqlite_path: "./data/buffer.sqlite3"
   max_rows: 200000
+  max_rows_events: 50000
 
 gps:
   enabled: true
@@ -39,6 +45,8 @@ lte:
   mmcli: "mmcli"
   at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2"]
   at_baud: 115200
+  # For SMS/call events. If null, we will try lte.at_ports.
+  events_port: null
 
 logging:
   dir: "./logs"

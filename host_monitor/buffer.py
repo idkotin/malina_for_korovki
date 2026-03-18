@@ -21,10 +21,16 @@ class BufferCfg:
     max_rows: int
 
 
-class SqliteBuffer:
-    def __init__(self, cfg: BufferCfg):
-        self._path = Path(cfg.sqlite_path)
-        self._max_rows = cfg.max_rows
+class SqliteQueue:
+    """
+    SQLite-backed FIFO queue for JSON payloads.
+    We keep separate tables for different streams (telemetry vs modem events).
+    """
+
+    def __init__(self, *, sqlite_path: str, table: str, max_rows: int):
+        self._path = Path(sqlite_path)
+        self._table = table
+        self._max_rows = max_rows
         self._conn = sqlite3.connect(self._path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA synchronous=NORMAL;")
@@ -33,21 +39,23 @@ class SqliteBuffer:
     def _init_schema(self) -> None:
         self._conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS buffer (
+            CREATE TABLE IF NOT EXISTS {table} (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               created_utc TEXT NOT NULL,
               payload_json TEXT NOT NULL
             );
-            """
+            """.format(table=self._table)
         )
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_buffer_id ON buffer(id);")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_{t}_id ON {t}(id);".format(t=self._table)
+        )
         self._conn.commit()
 
     def put(self, payload: dict) -> None:
         try:
             payload_json = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
             self._conn.execute(
-                "INSERT INTO buffer(created_utc, payload_json) VALUES(?, ?);",
+                "INSERT INTO {t}(created_utc, payload_json) VALUES(?, ?);".format(t=self._table),
                 (utc_now_iso(), payload_json),
             )
             self._conn.commit()
@@ -57,26 +65,26 @@ class SqliteBuffer:
 
     def _trim_if_needed(self) -> None:
         try:
-            cur = self._conn.execute("SELECT COUNT(*) FROM buffer;")
+            cur = self._conn.execute("SELECT COUNT(*) FROM {t};".format(t=self._table))
             (count,) = cur.fetchone() or (0,)
             if count <= self._max_rows:
                 return
             delete_n = count - self._max_rows
             self._conn.execute(
                 """
-                DELETE FROM buffer
-                WHERE id IN (SELECT id FROM buffer ORDER BY id ASC LIMIT ?);
-                """,
+                DELETE FROM {t}
+                WHERE id IN (SELECT id FROM {t} ORDER BY id ASC LIMIT ?);
+                """.format(t=self._table),
                 (delete_n,),
             )
             self._conn.commit()
-            log.warning("buffer trimmed by %s rows (max_rows=%s)", delete_n, self._max_rows)
+            log.warning("%s trimmed by %s rows (max_rows=%s)", self._table, delete_n, self._max_rows)
         except Exception:
             log.exception("failed to trim buffer")
 
     def peek_batch(self, limit: int) -> list[tuple[int, str]]:
         cur = self._conn.execute(
-            "SELECT id, payload_json FROM buffer ORDER BY id ASC LIMIT ?;",
+            "SELECT id, payload_json FROM {t} ORDER BY id ASC LIMIT ?;".format(t=self._table),
             (limit,),
         )
         return [(int(r[0]), str(r[1])) for r in cur.fetchall()]
@@ -85,11 +93,25 @@ class SqliteBuffer:
         if not ids:
             return
         q = ",".join(["?"] * len(ids))
-        self._conn.execute(f"DELETE FROM buffer WHERE id IN ({q});", ids)
+        self._conn.execute("DELETE FROM {t} WHERE id IN ({q});".format(t=self._table, q=q), ids)
         self._conn.commit()
 
     def count(self) -> int:
-        cur = self._conn.execute("SELECT COUNT(*) FROM buffer;")
+        cur = self._conn.execute("SELECT COUNT(*) FROM {t};".format(t=self._table))
         (count,) = cur.fetchone() or (0,)
         return int(count)
+
+    def oldest_age_s(self) -> float | None:
+        try:
+            cur = self._conn.execute(
+                "SELECT created_utc FROM {t} ORDER BY id ASC LIMIT 1;".format(t=self._table)
+            )
+            row = cur.fetchone()
+            if not row or not row[0]:
+                return None
+            created = str(row[0]).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(created)
+            return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
+        except Exception:
+            return None
 

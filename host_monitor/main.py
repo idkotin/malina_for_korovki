@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import json
 import logging
 import time
 
-from host_monitor.buffer import BufferCfg as BufferCfgDC
-from host_monitor.buffer import SqliteBuffer
+from host_monitor.buffer import SqliteQueue
 from host_monitor.config import ensure_dirs, load_config, parse_args
 from host_monitor.gps_reader import GpsCfg as GpsCfgDC
 from host_monitor.gps_reader import GpsReader
 from host_monitor.log_setup import setup_logging
 from host_monitor.lte_info import LteCfg as LteCfgDC
 from host_monitor.lte_info import get_lte_info
+from host_monitor.modem_events import ModemEventsCfg, ModemEventsReader
 from host_monitor.sender import Sender
 from host_monitor.system_info import read_cpu_temp_c
 from host_monitor.telemetry_builder import build_telemetry
@@ -30,7 +29,8 @@ def main(argv: list[str] | None = None) -> None:
     ensure_dirs(cfg)
     setup_logging(cfg.logging)
 
-    buffer = SqliteBuffer(BufferCfgDC(sqlite_path=cfg.buffer.sqlite_path, max_rows=cfg.buffer.max_rows))
+    telemetry_q = SqliteQueue(sqlite_path=cfg.buffer.sqlite_path, table="telemetry", max_rows=cfg.buffer.max_rows)
+    events_q = SqliteQueue(sqlite_path=cfg.buffer.sqlite_path, table="events", max_rows=cfg.buffer.max_rows_events)
 
     gps = GpsReader(
         GpsCfgDC(
@@ -52,10 +52,24 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     sender = Sender(cfg.send.url, timeout_s=cfg.send.timeout_s)
+    events_sender = Sender(cfg.events.url, timeout_s=cfg.events.timeout_s)
+
+    events_reader = ModemEventsReader(
+        ModemEventsCfg(
+            enabled=True,
+            port=cfg.lte.events_port,
+            candidate_ports=cfg.lte.at_ports,
+            baud=cfg.lte.at_baud,
+        )
+    )
+    events_reader.start()
 
     seq = 0
     last_log = 0.0
-    last_flush_attempt = 0.0
+    last_telemetry_flush = 0.0
+    last_events_flush = 0.0
+    telemetry_flush_backoff_s = 1.0
+    events_flush_backoff_s = 1.0
 
     log.info("started device_id=%s url=%s interval_s=%s", cfg.device.id, cfg.send.url, cfg.send.interval_s)
 
@@ -78,7 +92,15 @@ def main(argv: list[str] | None = None) -> None:
             module_status = {
                 "gps": gps.status(),
                 "wifi_error": wifi_err,
-                "buffer_rows": buffer.count(),
+                "telemetry_buffer_rows": telemetry_q.count(),
+                "telemetry_buffer_oldest_age_s": telemetry_q.oldest_age_s(),
+                "events_buffer_rows": events_q.count(),
+                "events_buffer_oldest_age_s": events_q.oldest_age_s(),
+                "events_reader": events_reader.status(),
+                "flush": {
+                    "telemetry_backoff_s": telemetry_flush_backoff_s,
+                    "events_backoff_s": events_flush_backoff_s,
+                },
             }
 
             telemetry = build_telemetry(
@@ -98,32 +120,59 @@ def main(argv: list[str] | None = None) -> None:
                 sender.send_one(payload)
             except Exception as e:
                 module_status["send_error"] = str(e)
-                buffer.put(payload)
+                telemetry_q.put(payload)
 
-            # Flush buffer periodically (every ~1s) in FIFO order
-            now = time.time()
-            if now - last_flush_attempt >= 1.0:
-                last_flush_attempt = now
+            # Drain modem events -> send/buffer
+            for ev in events_reader.drain(max_items=20):
+                ev_payload = {"device_id": cfg.device.id, **ev}
                 try:
-                    batch = buffer.peek_batch(cfg.send.max_batch)
+                    events_sender.send_one(ev_payload)
+                except Exception:
+                    events_q.put(ev_payload)
+
+            # Flush buffers with backoff and time budget
+            now = time.time()
+            time_budget_s = 0.2
+            budget_end = now + time_budget_s
+
+            if now - last_telemetry_flush >= telemetry_flush_backoff_s and time.time() < budget_end:
+                last_telemetry_flush = now
+                try:
+                    batch = telemetry_q.peek_batch(cfg.send.max_batch)
                     if batch:
                         ids = [rid for rid, _ in batch]
-                        sender.send_batch([p for _, p in batch])
-                        buffer.delete_ids(ids)
+                        sender.send_json_string_batch([p for _, p in batch])
+                        telemetry_q.delete_ids(ids)
+                    telemetry_flush_backoff_s = 1.0
                 except Exception as e:
-                    module_status["flush_error"] = str(e)
+                    module_status["telemetry_flush_error"] = str(e)
+                    telemetry_flush_backoff_s = min(telemetry_flush_backoff_s * 2, 60.0)
+
+            if now - last_events_flush >= events_flush_backoff_s and time.time() < budget_end:
+                last_events_flush = now
+                try:
+                    batch = events_q.peek_batch(cfg.events.max_batch)
+                    if batch:
+                        ids = [rid for rid, _ in batch]
+                        events_sender.send_json_string_batch([p for _, p in batch])
+                        events_q.delete_ids(ids)
+                    events_flush_backoff_s = 1.0
+                except Exception as e:
+                    module_status["events_flush_error"] = str(e)
+                    events_flush_backoff_s = min(events_flush_backoff_s * 2, 60.0)
 
             # Periodic status log
             if now - last_log >= 10.0:
                 last_log = now
                 log.info(
-                    "seq=%s gps_ok=%s weight_ok=%s wifi=%s lte_ok=%s buffer=%s",
+                    "seq=%s gps_ok=%s weight_ok=%s wifi=%s lte_ok=%s tbuf=%s ebuf=%s",
                     seq,
                     pos.ok,
                     w.ok,
                     len(wifi_clients),
                     lte.ok,
-                    buffer.count(),
+                    telemetry_q.count(),
+                    events_q.count(),
                 )
 
             # Sleep to keep interval
@@ -137,6 +186,14 @@ def main(argv: list[str] | None = None) -> None:
             pass
         try:
             sender.close()
+        except Exception:
+            pass
+        try:
+            events_reader.stop()
+        except Exception:
+            pass
+        try:
+            events_sender.close()
         except Exception:
             pass
 
