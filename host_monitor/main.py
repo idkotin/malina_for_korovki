@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> None:
             lte = get_lte_info(
                 LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
             )
+            if cfg.lte.events_enabled:
+                # Avoid AT port contention: reuse LTE metrics collected by events reader.
+                snap = events_reader.lte_snapshot()
+                if snap.get("rssi_dbm") is not None:
+                    lte.rssi_dbm = int(snap["rssi_dbm"])
+                if snap.get("access_tech"):
+                    lte.access_tech = str(snap["access_tech"])
             cpu_temp = read_cpu_temp_c()
 
             module_status = {

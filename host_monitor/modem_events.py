@@ -78,6 +78,7 @@ class ModemEventsReader:
         self._thread: threading.Thread | None = None
         self._status: dict = {"enabled": cfg.enabled, "running": False}
         self._last_err: str | None = None
+        self._lte_snapshot: dict = {"rssi_dbm": None, "access_tech": None, "ts": None}
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -105,6 +106,9 @@ class ModemEventsReader:
         s = dict(self._status)
         s["last_error"] = self._last_err
         return s
+
+    def lte_snapshot(self) -> dict:
+        return dict(self._lte_snapshot)
 
     def _open_port(self) -> serial.Serial:
         ports = [self._cfg.port] if self._cfg.port else []
@@ -152,6 +156,29 @@ class ModemEventsReader:
         _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=2.0)
         return {"type": "sms", "timestamp": utc_now_iso(), "from": from_num, "text": text}
 
+    def _poll_lte_metrics(self, ser: serial.Serial) -> None:
+        # AT+CSQ => RSSI in 0..31 or 99 unknown
+        out = _at_cmd(ser, "AT+CSQ", timeout_s=1.0)
+        rssi_dbm = None
+        for ln in out:
+            m = re.search(r"\+CSQ:\s*(\d+),", ln)
+            if not m:
+                continue
+            csq = int(m.group(1))
+            if 0 <= csq <= 31:
+                rssi_dbm = -113 + (2 * csq)
+            break
+
+        # AT+COPS? gives access technology mode/operator
+        tech = None
+        out2 = _at_cmd(ser, "AT+COPS?", timeout_s=1.0)
+        for ln in out2:
+            if "+COPS:" in ln:
+                tech = "LTE/auto"
+                break
+
+        self._lte_snapshot = {"rssi_dbm": rssi_dbm, "access_tech": tech, "ts": utc_now_iso()}
+
     def _run(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
@@ -161,7 +188,16 @@ class ModemEventsReader:
                     self._status["running"] = True
                     self._last_err = None
                     backoff = 1.0
+                    last_lte_poll = 0.0
                     while not self._stop.is_set():
+                        now = time.time()
+                        if now - last_lte_poll >= 10.0:
+                            try:
+                                self._poll_lte_metrics(ser)
+                            except Exception as e:
+                                self._last_err = str(e)
+                            last_lte_poll = now
+
                         raw = ser.readline()
                         if not raw:
                             continue
