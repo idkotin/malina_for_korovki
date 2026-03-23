@@ -19,9 +19,12 @@ buffer:
 
 gps:
   enabled: true
-  port: "/dev/ttyUSB1"
-  # If you don't know baud, keep null to auto-detect.
-  baud: null
+  # Fixed GPS port. Keep null to auto-detect from port_candidates.
+  port: null
+  # Add all possible modem ttyUSB ports here.
+  port_candidates: ["/dev/ttyUSB1", "/dev/ttyUSB3", "/dev/ttyUSB0", "/dev/ttyUSB2"]
+  # For SIM7600 GPS this is often 115200.
+  baud: 115200
   baud_candidates: [9600, 19200, 38400, 57600, 115200]
 
 weight:
@@ -43,9 +46,10 @@ lte:
   enabled: true
   # Preferred: ModemManager (mmcli). If not installed, we'll try AT.
   mmcli: "mmcli"
-  at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2"]
+  at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2", "/dev/ttyUSB3", "/dev/ttyUSB1"]
   at_baud: 115200
-  # For SMS/call events. If null, we will try lte.at_ports.
+  events_enabled: true
+  # Fixed AT port for SMS/call events. If null, we auto-detect from at_ports.
   events_port: null
 
 logging:

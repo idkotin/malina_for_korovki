@@ -5,6 +5,7 @@ import re
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import serial
 
@@ -20,6 +21,15 @@ class LteCfg:
     mmcli: str
     at_ports: list[str]
     at_baud: int
+
+
+def _candidate_at_ports(cfg: LteCfg) -> list[str]:
+    dynamic = [str(p) for p in Path("/dev").glob("ttyUSB*")]
+    merged: list[str] = []
+    for p in cfg.at_ports + dynamic:
+        if p not in merged:
+            merged.append(p)
+    return merged
 
 
 def _run(cmd: list[str], timeout_s: float = 3.0) -> tuple[int, str]:
@@ -54,7 +64,7 @@ def _mmcli_get_signal(mmcli: str, modem_id: str) -> LteInfo | None:
                 rssi = int(m.group(1))
             except Exception:
                 rssi = None
-        return LteInfo(ok=True, rssi_dbm=rssi)
+        return LteInfo(rssi_dbm=rssi)
 
     # Fallback: parse bearer/3gpp info for access tech
     rc2, out2 = _run([mmcli, "-m", modem_id])
@@ -64,7 +74,7 @@ def _mmcli_get_signal(mmcli: str, modem_id: str) -> LteInfo | None:
     m2 = re.search(r"access tech:\s*(.+)", out2, re.IGNORECASE)
     if m2:
         tech = m2.group(1).strip()
-    return LteInfo(ok=True, access_tech=tech)
+    return LteInfo(access_tech=tech)
 
 
 def _at_query(port: str, baud: int, cmd: str, timeout_s: float = 1.5) -> str:
@@ -89,7 +99,7 @@ def _at_query(port: str, baud: int, cmd: str, timeout_s: float = 1.5) -> str:
 def _lte_from_at(cfg: LteCfg) -> LteInfo:
     # Minimal, robust: try AT+CSQ for RSSI, AT+COPS? for tech (optional).
     last_err = None
-    for p in cfg.at_ports:
+    for p in _candidate_at_ports(cfg):
         try:
             out = _at_query(p, cfg.at_baud, "AT+CSQ")
             m = re.search(r"\+CSQ:\s*(\d+),", out)
@@ -103,16 +113,17 @@ def _lte_from_at(cfg: LteCfg) -> LteInfo:
             out2 = _at_query(p, cfg.at_baud, "AT+COPS?")
             if "+COPS:" in out2:
                 tech = "LTE/auto"
-            return LteInfo(ok=True, rssi_dbm=rssi_dbm, access_tech=tech)
+            return LteInfo(rssi_dbm=rssi_dbm, access_tech=tech)
         except Exception as e:
             last_err = str(e)
             continue
-    return LteInfo(ok=False, error=last_err or "no_at_port_worked")
+    log.warning("LTE AT probe failed: %s", last_err or "no_at_port_worked")
+    return LteInfo()
 
 
 def get_lte_info(cfg: LteCfg) -> LteInfo:
     if not cfg.enabled:
-        return LteInfo(ok=False, error="disabled")
+        return LteInfo()
 
     modem_id = _mmcli_detect_modem(cfg.mmcli)
     if modem_id is not None:

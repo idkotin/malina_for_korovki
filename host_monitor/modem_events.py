@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import serial
 
@@ -108,6 +109,7 @@ class ModemEventsReader:
     def _open_port(self) -> serial.Serial:
         ports = [self._cfg.port] if self._cfg.port else []
         ports += [p for p in self._cfg.candidate_ports if p not in ports]
+        ports += [str(p) for p in Path("/dev").glob("ttyUSB*") if str(p) not in ports]
         last_exc = None
         for p in ports:
             try:

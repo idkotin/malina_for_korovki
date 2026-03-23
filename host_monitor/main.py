@@ -36,6 +36,7 @@ def main(argv: list[str] | None = None) -> None:
         GpsCfgDC(
             enabled=cfg.gps.enabled,
             port=cfg.gps.port,
+            port_candidates=cfg.gps.port_candidates,
             baud=cfg.gps.baud,
             baud_candidates=cfg.gps.baud_candidates,
         )
@@ -56,7 +57,7 @@ def main(argv: list[str] | None = None) -> None:
 
     events_reader = ModemEventsReader(
         ModemEventsCfg(
-            enabled=True,
+            enabled=cfg.lte.events_enabled,
             port=cfg.lte.events_port,
             candidate_ports=cfg.lte.at_ports,
             baud=cfg.lte.at_baud,
@@ -91,7 +92,6 @@ def main(argv: list[str] | None = None) -> None:
 
             module_status = {
                 "gps": gps.status(),
-                "wifi_error": wifi_err,
                 "telemetry_buffer_rows": telemetry_q.count(),
                 "telemetry_buffer_oldest_age_s": telemetry_q.oldest_age_s(),
                 "events_buffer_rows": events_q.count(),
@@ -102,6 +102,8 @@ def main(argv: list[str] | None = None) -> None:
                     "events_backoff_s": events_flush_backoff_s,
                 },
             }
+            if wifi_err:
+                module_status["wifi_scan_error"] = wifi_err
 
             telemetry = build_telemetry(
                 device_id=cfg.device.id,
@@ -165,12 +167,12 @@ def main(argv: list[str] | None = None) -> None:
             if now - last_log >= 10.0:
                 last_log = now
                 log.info(
-                    "seq=%s gps_ok=%s weight_ok=%s wifi=%s lte_ok=%s tbuf=%s ebuf=%s",
+                    "seq=%s gps_fix=%s weight=%s wifi=%s lte_rssi=%s tbuf=%s ebuf=%s",
                     seq,
-                    pos.ok,
-                    w.ok,
+                    pos.quality,
+                    w.weight,
                     len(wifi_clients),
-                    lte.ok,
+                    lte.rssi_dbm,
                     telemetry_q.count(),
                     events_q.count(),
                 )

@@ -69,13 +69,13 @@ class WeightReader:
 
     def read_weight(self) -> Weight:
         if not self._cfg.enabled:
-            return Weight(ok=False, error="disabled")
+            return Weight(weight=None)
         try:
             raw = self.read_raw()
-            kg = (raw - self._cal.offset) * self._cal.scale
-            return Weight(ok=True, kg=float(kg))
-        except Exception as e:
-            return Weight(ok=False, error=str(e))
+            value = (raw - self._cal.offset) * self._cal.scale
+            return Weight(weight=float(value))
+        except Exception:
+            return Weight(weight=None)
 
     def tare(self) -> float:
         raw = self.read_raw()

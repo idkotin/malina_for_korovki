@@ -9,14 +9,10 @@ class Position(BaseModel):
     lat: float | None = None
     lon: float | None = None
     quality: int | None = None  # 0=no fix, 1=GPS fix, 2=DGPS...
-    ok: bool = False
-    error: str | None = None
 
 
 class Weight(BaseModel):
-    kg: float | None = None
-    ok: bool = False
-    error: str | None = None
+    weight: float | None = None
 
 
 class SystemInfo(BaseModel):
@@ -26,8 +22,6 @@ class SystemInfo(BaseModel):
 class LteInfo(BaseModel):
     access_tech: str | None = None  # LTE/UMTS/...
     rssi_dbm: int | None = None
-    ok: bool = False
-    error: str | None = None
 
 
 class Telemetry(BaseModel):

@@ -35,7 +35,10 @@ class BufferCfg(BaseModel):
 
 class GpsCfg(BaseModel):
     enabled: bool = True
-    port: str = "/dev/ttyUSB1"
+    # Fixed device path (optional). If null, auto-detect from port_candidates.
+    port: str | None = None
+    # Candidates for auto-detection. You can also include ttyUSB3 and others.
+    port_candidates: list[str] = Field(default_factory=lambda: ["/dev/ttyUSB1", "/dev/ttyUSB3", "/dev/ttyUSB0", "/dev/ttyUSB2"])
     baud: int | None = None
     baud_candidates: list[int] = Field(default_factory=lambda: [9600, 19200, 38400, 57600, 115200])
 
@@ -59,6 +62,7 @@ class LteCfg(BaseModel):
     at_ports: list[str] = Field(default_factory=lambda: ["/dev/ttyUSB0", "/dev/ttyUSB2"])
     at_baud: int = 115200
     events_port: str | None = None
+    events_enabled: bool = True
 
 
 class LoggingCfg(BaseModel):
