@@ -64,17 +64,30 @@ def _mmcli_get_signal(mmcli: str, modem_id: str) -> LteInfo | None:
                 rssi = int(m.group(1))
             except Exception:
                 rssi = None
-        return LteInfo(rssi_dbm=rssi)
+        if rssi is not None:
+            return LteInfo(rssi_dbm=rssi)
 
-    # Fallback: parse bearer/3gpp info for access tech
+    # Fallback: parse generic modem info.
     rc2, out2 = _run([mmcli, "-m", modem_id])
     if rc2 != 0:
         return None
     tech = None
+    rssi_dbm = None
     m2 = re.search(r"access tech:\s*(.+)", out2, re.IGNORECASE)
     if m2:
         tech = m2.group(1).strip()
-    return LteInfo(access_tech=tech)
+
+    # Some ModemManager versions expose only signal quality percentage.
+    # Example: "signal quality: 65% (recent)"
+    m3 = re.search(r"signal quality:\s*(\d+)%", out2, re.IGNORECASE)
+    if m3:
+        try:
+            pct = int(m3.group(1))
+            # Rough LTE estimate: 0% ~ -113 dBm, 100% ~ -51 dBm
+            rssi_dbm = int(round(-113 + (pct * 62 / 100)))
+        except Exception:
+            rssi_dbm = None
+    return LteInfo(access_tech=tech, rssi_dbm=rssi_dbm)
 
 
 def _at_query(port: str, baud: int, cmd: str, timeout_s: float = 1.5) -> str:
