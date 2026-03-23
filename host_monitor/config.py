@@ -48,6 +48,13 @@ class WeightCfg(BaseModel):
     driver: str = "ads1263"
     calibration_path: str = "./data/scale_calibration.json"
     simulate: bool = True
+    # Path to cloned Waveshare python folder (contains ADS1263.py).
+    waveshare_path: str = "/opt/High-Precision_AD_HAT/python"
+    # Differential input pair: IN0-IN1 by default.
+    channel_pos: int = 0
+    channel_neg: int = 1
+    sample_count: int = 10
+    adc_rate: str = "ADS1263_20SPS"
 
 
 class WifiCfg(BaseModel):

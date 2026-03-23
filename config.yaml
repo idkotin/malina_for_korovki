@@ -29,11 +29,18 @@ gps:
 
 weight:
   enabled: false
-  # Will be used when ADC HAT arrives. Keep disabled for now.
+  # Set true when ADC + combiner are connected.
   driver: "ads1263"
   calibration_path: "./data/scale_calibration.json"
-  # If hardware isn't available, you can set simulate=true for testing.
-  simulate: true
+  # Keep true for tests without real load cells.
+  simulate: false
+  # Path where ADS1263.py from Waveshare repository is located.
+  waveshare_path: "/opt/High-Precision_AD_HAT/python"
+  # Differential channel pair AINx: weight signal = IN(channel_pos) - IN(channel_neg)
+  channel_pos: 0
+  channel_neg: 1
+  sample_count: 10
+  adc_rate: "ADS1263_20SPS"
 
 wifi:
   enabled: true

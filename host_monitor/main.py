@@ -49,6 +49,11 @@ def main(argv: list[str] | None = None) -> None:
             driver=cfg.weight.driver,
             calibration_path=cfg.weight.calibration_path,
             simulate=cfg.weight.simulate,
+            waveshare_path=cfg.weight.waveshare_path,
+            channel_pos=cfg.weight.channel_pos,
+            channel_neg=cfg.weight.channel_neg,
+            sample_count=cfg.weight.sample_count,
+            adc_rate=cfg.weight.adc_rate,
         )
     )
 
@@ -107,13 +112,11 @@ def main(argv: list[str] | None = None) -> None:
 
             telemetry = build_telemetry(
                 device_id=cfg.device.id,
-                seq=seq,
                 position=pos,
                 weight=w,
                 wifi_clients=wifi_clients,
                 cpu_temp_c=cpu_temp,
                 lte=lte,
-                module_status=module_status,
             )
             payload = telemetry.model_dump(mode="json")
 
@@ -167,7 +170,7 @@ def main(argv: list[str] | None = None) -> None:
             if now - last_log >= 10.0:
                 last_log = now
                 log.info(
-                    "seq=%s gps_fix=%s weight=%s wifi=%s lte_rssi=%s tbuf=%s ebuf=%s",
+                    "seq=%s gps_fix=%s weight=%s wifi=%s lte_rssi=%s tbuf=%s ebuf=%s status=%s",
                     seq,
                     pos.quality,
                     w.weight,
@@ -175,6 +178,7 @@ def main(argv: list[str] | None = None) -> None:
                     lte.rssi_dbm,
                     telemetry_q.count(),
                     events_q.count(),
+                    module_status,
                 )
 
             # Sleep to keep interval

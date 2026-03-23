@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -26,23 +26,15 @@ class LteInfo(BaseModel):
 
 class Telemetry(BaseModel):
     device_id: str
-    timestamp_utc: str
-    seq: int
-
-    position: Position = Field(default_factory=Position)
-    weight: Weight = Field(default_factory=Weight)
-    wifi_clients: list[str] = Field(default_factory=list)  # MAC list
-
-    system: SystemInfo = Field(default_factory=SystemInfo)
-    lte: LteInfo = Field(default_factory=LteInfo)
-
-    status: dict[str, Any] = Field(default_factory=dict)  # module health, last errors
-
-
-class BufferRow(BaseModel):
-    id: int
-    created_utc: str
-    payload_json: str
+    timestamp: str
+    lat: float | None = None
+    lon: float | None = None
+    weight: float | None = None
+    gps_quality: int | None = None
+    wifi_clients: list[str] = Field(default_factory=list)
+    cpu_temp_c: float | None = None
+    lte_rssi_dbm: int | None = None
+    lte_access_tech: str | None = None
 
 
 Level = Literal["DEBUG", "INFO", "WARNING", "ERROR"]

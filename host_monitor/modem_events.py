@@ -17,7 +17,7 @@ log = logging.getLogger("host_monitor.modem_events")
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 @dataclass(frozen=True)
@@ -67,8 +67,8 @@ class ModemEventsReader:
     Reads SMS/call events from a SIM7600-like modem AT port.
 
     Emits event dicts into an internal queue:
-    - {"type":"sms","timestamp_utc":...,"from":...,"text":...}
-    - {"type":"call","timestamp_utc":...,"from":...}
+    - {"type":"sms","timestamp":...,"from":...,"text":...}
+    - {"type":"call","timestamp":...,"from":...}
     """
 
     def __init__(self, cfg: ModemEventsCfg):
@@ -150,7 +150,7 @@ class ModemEventsReader:
         text = "\n".join(text_lines).strip() if text_lines else ""
         # Best effort: delete after read to avoid memory filling up
         _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=2.0)
-        return {"type": "sms", "timestamp_utc": utc_now_iso(), "from": from_num, "text": text}
+        return {"type": "sms", "timestamp": utc_now_iso(), "from": from_num, "text": text}
 
     def _run(self) -> None:
         backoff = 1.0
@@ -182,12 +182,12 @@ class ModemEventsReader:
                             continue
 
                         if line == "RING":
-                            self._q.put({"type": "call", "timestamp_utc": utc_now_iso(), "from": None})
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": None})
                             continue
 
                         m2 = CLIP_RE.match(line)
                         if m2:
-                            self._q.put({"type": "call", "timestamp_utc": utc_now_iso(), "from": m2.group(1)})
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1)})
                             continue
             except Exception as e:
                 self._status["running"] = False

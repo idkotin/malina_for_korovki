@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 from host_monitor.models import Weight
 
@@ -18,6 +20,11 @@ class WeightCfg:
     driver: str
     calibration_path: str
     simulate: bool
+    waveshare_path: str
+    channel_pos: int
+    channel_neg: int
+    sample_count: int
+    adc_rate: str
 
 
 @dataclass
@@ -54,12 +61,55 @@ class WeightReader:
         self._cfg = cfg
         self._cal = load_calibration(cfg.calibration_path)
         self._t = 0
+        self._adc_mod: ModuleType | None = None
+        self._adc_dev = None
+        self._adc_ready = False
 
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
 
+    def _init_ads1263(self) -> None:
+        if self._adc_ready:
+            return
+        waveshare_path = Path(self._cfg.waveshare_path)
+        if not waveshare_path.exists():
+            raise RuntimeError(f"waveshare path not found: {waveshare_path}")
+        if str(waveshare_path) not in sys.path:
+            sys.path.insert(0, str(waveshare_path))
+        try:
+            import ADS1263  # type: ignore
+        except Exception as e:
+            raise RuntimeError(f"cannot import ADS1263 from {waveshare_path}: {e}") from e
+        self._adc_mod = ADS1263
+        self._adc_dev = ADS1263.ADS1263()
+        # Rate string is from Waveshare examples, e.g. ADS1263_20SPS
+        self._adc_dev.ADS1263_init_ADC1(self._cfg.adc_rate)
+        self._adc_ready = True
+        log.info("ADS1263 initialized rate=%s", self._cfg.adc_rate)
+
+    def _read_ads1263_raw(self) -> float:
+        self._init_ads1263()
+        assert self._adc_mod is not None
+        assert self._adc_dev is not None
+
+        # Library API names vary slightly across versions; keep robust fallback.
+        read_one = getattr(self._adc_dev, "ADS1263_GetChannalValue", None)
+        if read_one is None:
+            read_one = getattr(self._adc_dev, "ADS1263_GetChannelValue", None)
+        if read_one is None:
+            raise RuntimeError("ADS1263 channel read method not found")
+
+        values: list[float] = []
+        n = max(1, int(self._cfg.sample_count))
+        for _ in range(n):
+            v_pos = float(read_one(int(self._cfg.channel_pos)))
+            v_neg = float(read_one(int(self._cfg.channel_neg)))
+            values.append(v_pos - v_neg)
+        return sum(values) / len(values)
+
     def read_raw(self) -> float:
-        # TODO: replace with ADS1263 reading when hardware arrives.
+        if self._cfg.driver.lower() == "ads1263" and not self._cfg.simulate:
+            return self._read_ads1263_raw()
         if self._cfg.simulate:
             self._t += 1
             base = 1000.0 + 50.0 * (random.random() - 0.5)
@@ -74,7 +124,8 @@ class WeightReader:
             raw = self.read_raw()
             value = (raw - self._cal.offset) * self._cal.scale
             return Weight(weight=float(value))
-        except Exception:
+        except Exception as e:
+            log.warning("weight read failed: %s", e)
             return Weight(weight=None)
 
     def tare(self) -> float:
