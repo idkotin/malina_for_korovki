@@ -39,6 +39,18 @@ SMS/call events use separate endpoint (`events.url`):
 }
 ```
 
+Call event example (same schema, empty `text`):
+
+```json
+{
+  "device_id": "isrk_hozyain_01",
+  "type": "call",
+  "timestamp": "2026-03-11T20:35:10",
+  "from": "+79991234567",
+  "text": ""
+}
+```
+
 ## 2) Install on Raspberry Pi OS
 
 ```bash

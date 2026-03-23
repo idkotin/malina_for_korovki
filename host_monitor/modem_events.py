@@ -68,7 +68,7 @@ class ModemEventsReader:
 
     Emits event dicts into an internal queue:
     - {"type":"sms","timestamp":...,"from":...,"text":...}
-    - {"type":"call","timestamp":...,"from":...}
+    - {"type":"call","timestamp":...,"from":...,"text":""}
     """
 
     def __init__(self, cfg: ModemEventsCfg):
@@ -146,7 +146,7 @@ class ModemEventsReader:
         if not header:
             return None
         m = re.search(r"^\+CMGR:\s*\"[^\"]+\",\"([^\"]*)\"", header)
-        from_num = m.group(1) if m else None
+        from_num = m.group(1) if m else ""
         text = "\n".join(text_lines).strip() if text_lines else ""
         # Best effort: delete after read to avoid memory filling up
         _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=2.0)
@@ -182,12 +182,12 @@ class ModemEventsReader:
                             continue
 
                         if line == "RING":
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": None})
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
                             continue
 
                         m2 = CLIP_RE.match(line)
                         if m2:
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1)})
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1), "text": ""})
                             continue
             except Exception as e:
                 self._status["running"] = False
