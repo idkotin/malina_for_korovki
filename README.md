@@ -66,7 +66,7 @@ sudo raspi-config
 sudo reboot
 ```
 
-Clone project and install:
+Clone project and install (use a **venv** — Raspberry Pi OS blocks system-wide `pip` with PEP 668):
 
 ```bash
 sudo mkdir -p /opt
@@ -74,8 +74,16 @@ cd /opt
 sudo git clone https://github.com/idkotin/malina_for_korovki.git host-monitor
 sudo chown -R $USER:$USER /opt/host-monitor
 cd /opt/host-monitor
-python3 -m pip install -U pip
-python3 -m pip install .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install .
+```
+
+After install, run the app with the venv Python (or activate first):
+
+```bash
+/opt/host-monitor/.venv/bin/python -m host_monitor.main --config /opt/host-monitor/config.yaml
 ```
 
 Install Waveshare ADS1263 python library:
@@ -111,7 +119,10 @@ Important fields:
 
 ```bash
 cd /opt/host-monitor
+source .venv/bin/activate
 host-monitor --config ./config.yaml
+# or without activate:
+# /opt/host-monitor/.venv/bin/host-monitor --config ./config.yaml
 ```
 
 ## 5) Run as systemd service
@@ -170,6 +181,7 @@ Commands:
 
 ```bash
 cd /opt/host-monitor
+source .venv/bin/activate
 host-monitor-calibrate --config ./config.yaml tare
 host-monitor-calibrate --config ./config.yaml calibrate --known-kg 100
 ```
