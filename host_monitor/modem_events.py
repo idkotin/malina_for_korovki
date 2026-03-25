@@ -190,6 +190,8 @@ class ModemEventsReader:
         quoted = re.findall(r'"([^"]*)"', header)
         # quoted[0]=status, quoted[1]=phone, quoted[2]=subaddress (often ""), ...
         from_num = quoted[1].strip() if len(quoted) >= 2 else ""
+        # With AT+CSCS="UCS2" some firmwares output phone in UTF-16BE hex too.
+        from_num = decode_maybe_ucs2(from_num)
         text = "\n".join(text_lines).strip() if text_lines else ""
         text = decode_maybe_ucs2(text)
         # Best effort: delete after read to avoid memory filling up
@@ -263,7 +265,7 @@ class ModemEventsReader:
                             break
                     if not phone and len(quoted) >= 2:
                         phone = quoted[1].strip()
-                    current_from = phone
+                    current_from = decode_maybe_ucs2(phone)
                 else:
                     if current_idx is not None:
                         current_text_lines.append(ln)
