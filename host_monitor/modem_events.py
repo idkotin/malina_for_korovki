@@ -57,8 +57,32 @@ def _at_cmd(ser: serial.Serial, cmd: str, timeout_s: float = 1.5) -> list[str]:
     return lines
 
 
+def decode_maybe_ucs2(text: str) -> str:
+    """
+    Some operators send UCS2/UTF-16-BE as HEX string.
+    If we detect hex-looking content, try to decode as utf-16-be.
+    Otherwise return the input as-is.
+    """
+    t = text.strip()
+    if len(t) >= 2 and t[0] == '"' and t[-1] == '"':
+        t = t[1:-1].strip()
+
+    if len(t) >= 4 and (len(t) % 2 == 0) and HEX_RE.match(t):
+        try:
+            b = bytes.fromhex(t)
+            decoded = b.decode("utf-16-be", errors="strict")
+            return decoded.replace("\x00", "").strip()
+        except Exception:
+            return text
+    return text
+
+
 SMS_INDEX_RE = re.compile(r"^\+CMTI:.*?,\s*(\d+)\s*$")
-CLIP_RE = re.compile(r"^\+CLIP:\s*\"([^\"]+)\"")
+# Example variants:
+#   +CLIP: "+7999...",4,0,0,"",0
+#   +CLIP: +7999...,4,0,0,"",0
+CLIP_RE = re.compile(r'^\+CLIP:\s*\"?([^\",]+)')
+HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
 
 class ModemEventsReader:
@@ -128,11 +152,15 @@ class ModemEventsReader:
         raise RuntimeError(f"no modem events port available: {last_exc}")
 
     def _configure_modem(self, ser: serial.Serial) -> None:
-        # Text mode SMS, deliver indications to TE, enable caller ID.
+        # Text mode SMS, set storage, enable caller ID, configure URCs.
         _at_cmd(ser, "ATE0")
         _at_cmd(ser, "AT+CMGF=1")
+        # Force SIM storage (often "SM") so that +CMTI indices match CMGR.
+        _at_cmd(ser, 'AT+CPMS="SM","SM","SM"')
         _at_cmd(ser, "AT+CSCS=\"GSM\"")
         _at_cmd(ser, "AT+CLIP=1")
+        # Clear SIM SMS memory on startup to avoid SMS FULL and old unread messages.
+        _at_cmd(ser, "AT+CMGD=1,4", timeout_s=3.0)
         # CNMI=2,1,0,0,0 -> new SMS indication (+CMTI) and store in memory
         _at_cmd(ser, "AT+CNMI=2,1,0,0,0")
 
@@ -142,19 +170,25 @@ class ModemEventsReader:
         # +CMGR: "REC UNREAD","+7999...",,"26/03/18,12:34:56+12"
         # message text...
         header = None
+        from_num = ""
         text_lines: list[str] = []
         for ln in lines:
             if ln.startswith("+CMGR:"):
                 header = ln
-            elif not ln.startswith("AT+"):
+            elif ln in ("OK", "ERROR") or ln.startswith("AT+"):
+                continue
+            else:
                 text_lines.append(ln)
         if not header:
             return None
-        m = re.search(r"^\+CMGR:\s*\"[^\"]+\",\"([^\"]*)\"", header)
-        from_num = m.group(1) if m else ""
+        # +CMGR: "REC UNREAD","+7999...",...,"26/03/25,15:28:16+12"
+        m = re.search(r'^\+CMGR:\s*\"[^\"]*\",\s*\"?([^\"]*)\"?', header)
+        from_num = m.group(1).strip() if m else ""
         text = "\n".join(text_lines).strip() if text_lines else ""
+        text = decode_maybe_ucs2(text)
         # Best effort: delete after read to avoid memory filling up
         _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=2.0)
+        log.info("SMS received: idx=%s from=%s text_len=%s", idx, from_num, len(text))
         return {"type": "sms", "timestamp": utc_now_iso(), "from": from_num, "text": text}
 
     def _poll_lte_metrics(self, ser: serial.Serial) -> None:
@@ -210,6 +244,7 @@ class ModemEventsReader:
                         if m:
                             try:
                                 idx = int(m.group(1))
+                                log.info("CMTI indication: idx=%s", idx)
                                 sms = self._read_sms_by_index(ser, idx)
                                 if sms:
                                     self._q.put(sms)
@@ -218,13 +253,23 @@ class ModemEventsReader:
                                 log.warning("sms read error: %s", e)
                             continue
 
+                        # When SIM memory is full or there is an SMS-related error,
+                        # clear all SMS to restore reception.
+                        if "SMS FULL" in line.upper() or line.startswith("+CMS ERROR"):
+                            try:
+                                log.warning("SMS capacity/error detected (%s). Clearing SIM SMS memory.", line)
+                                _at_cmd(ser, "AT+CMGD=1,4", timeout_s=3.0)
+                            except Exception as e:
+                                self._last_err = str(e)
+                            continue
+
                         if line == "RING":
                             self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
                             continue
 
                         m2 = CLIP_RE.match(line)
                         if m2:
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1), "text": ""})
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1).strip(), "text": ""})
                             continue
             except Exception as e:
                 self._status["running"] = False
