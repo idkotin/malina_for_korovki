@@ -25,10 +25,7 @@ def build_telemetry(
     weight_kg = weight.weight if weight.weight is not None else 0.0
 
     lte_rssi = lte.rssi_dbm if lte.rssi_dbm is not None else 0
-    access_code = 0.0
-    if lte.access_tech:
-        # Backend expects numbers; encode LTE as 1, everything else as 0.
-        access_code = 1.0 if "LTE" in lte.access_tech.upper() else 0.0
+    lte_access_tech = lte.access_tech if lte.access_tech is not None else "0"
 
     return Telemetry(
         device_id=device_id,
@@ -40,6 +37,6 @@ def build_telemetry(
         wifi_clients=wifi_clients,
         cpu_temp_c=cpu_temp_c if cpu_temp_c is not None else 0.0,
         lte_rssi_dbm=lte_rssi,
-        lte_access_tech=access_code,
+        lte_access_tech=lte_access_tech,
     )
 
