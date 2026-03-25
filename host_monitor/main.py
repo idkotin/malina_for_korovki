@@ -18,6 +18,7 @@ from host_monitor.weight_reader import WeightCfg as WeightCfgDC
 from host_monitor.weight_reader import WeightReader
 from host_monitor.wifi_clients import WifiCfg as WifiCfgDC
 from host_monitor.wifi_clients import get_wifi_clients
+from host_monitor.models import LteInfo
 
 
 log = logging.getLogger("host_monitor")
@@ -50,10 +51,14 @@ def main(argv: list[str] | None = None) -> None:
             calibration_path=cfg.weight.calibration_path,
             simulate=cfg.weight.simulate,
             waveshare_path=cfg.weight.waveshare_path,
+            ref_pos=cfg.weight.ref_pos,
+            ref_neg=cfg.weight.ref_neg,
             channel_pos=cfg.weight.channel_pos,
             channel_neg=cfg.weight.channel_neg,
             sample_count=cfg.weight.sample_count,
             adc_rate=cfg.weight.adc_rate,
+            trim_fraction=cfg.weight.trim_fraction,
+            min_ref_abs=cfg.weight.min_ref_abs,
         )
     )
 
@@ -90,16 +95,18 @@ def main(argv: list[str] | None = None) -> None:
             wifi_clients, wifi_err = get_wifi_clients(
                 WifiCfgDC(enabled=cfg.wifi.enabled, hostapd_cli=cfg.wifi.hostapd_cli, ap_interface=cfg.wifi.ap_interface)
             )
-            lte = get_lte_info(
-                LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
-            )
             if cfg.lte.events_enabled:
-                # Avoid AT port contention: reuse LTE metrics collected by events reader.
+                # LTE metrics come from the AT events reader (prevents AT port contention).
+                lte = LteInfo()
                 snap = events_reader.lte_snapshot()
                 if snap.get("rssi_dbm") is not None:
                     lte.rssi_dbm = int(snap["rssi_dbm"])
                 if snap.get("access_tech"):
                     lte.access_tech = str(snap["access_tech"])
+            else:
+                lte = get_lte_info(
+                    LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
+                )
             cpu_temp = read_cpu_temp_c()
 
             module_status = {

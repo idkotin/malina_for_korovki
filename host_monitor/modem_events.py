@@ -40,7 +40,6 @@ def _at_readline(ser: serial.Serial, deadline: float) -> str | None:
 
 
 def _at_cmd(ser: serial.Serial, cmd: str, timeout_s: float = 1.5) -> list[str]:
-    ser.reset_input_buffer()
     ser.write((cmd + "\r").encode("ascii"))
     ser.flush()
     lines: list[str] = []
@@ -58,7 +57,7 @@ def _at_cmd(ser: serial.Serial, cmd: str, timeout_s: float = 1.5) -> list[str]:
     return lines
 
 
-SMS_INDEX_RE = re.compile(r"^\+CMTI:\s*\"[^\"]+\",\s*(\d+)\s*$")
+SMS_INDEX_RE = re.compile(r"^\+CMTI:.*?,\s*(\d+)\s*$")
 CLIP_RE = re.compile(r"^\+CLIP:\s*\"([^\"]+)\"")
 
 
@@ -113,7 +112,9 @@ class ModemEventsReader:
     def _open_port(self) -> serial.Serial:
         ports = [self._cfg.port] if self._cfg.port else []
         ports += [p for p in self._cfg.candidate_ports if p not in ports]
-        ports += [str(p) for p in Path("/dev").glob("ttyUSB*") if str(p) not in ports]
+        # If user didn't provide candidates, try all ttyUSB ports.
+        if not ports:
+            ports += [str(p) for p in Path("/dev").glob("ttyUSB*") if str(p) not in ports]
         last_exc = None
         for p in ports:
             try:
@@ -191,7 +192,7 @@ class ModemEventsReader:
                     last_lte_poll = 0.0
                     while not self._stop.is_set():
                         now = time.time()
-                        if now - last_lte_poll >= 10.0:
+                        if now - last_lte_poll >= 30.0:
                             try:
                                 self._poll_lte_metrics(ser)
                             except Exception as e:

@@ -21,10 +21,17 @@ class WeightCfg:
     calibration_path: str
     simulate: bool
     waveshare_path: str
+    # Bridge reference differential inputs (E+ - E-)
+    ref_pos: int
+    ref_neg: int
+    # Bridge measurement differential inputs (SIG+ - SIG-)
     channel_pos: int
     channel_neg: int
     sample_count: int
     adc_rate: str
+    # Trim fraction for ratio filtering. Example: 0.1 removes 10% smallest and 10% largest samples.
+    trim_fraction: float = 0.1
+    min_ref_abs: float = 1e-9
 
 
 @dataclass
@@ -87,7 +94,46 @@ class WeightReader:
         self._adc_ready = True
         log.info("ADS1263 initialized rate=%s", self._cfg.adc_rate)
 
-    def _read_ads1263_raw(self) -> float:
+    def _to_signed32(self, v: int) -> int:
+        # ADS1263 driver returns raw 32-bit words; convert to signed int.
+        if v & 0x80000000:
+            return int(v - (1 << 32))
+        return int(v)
+
+    def _diff_channel_from_ain_pair(self, pos: int, neg: int) -> tuple[int, float]:
+        """
+        ADS1263_GetChannalValue(Channel) expects Channel in [0..4] meaning:
+          0 => AIN0-AIN1
+          1 => AIN2-AIN3
+          2 => AIN4-AIN5
+          3 => AIN6-AIN7
+          4 => AIN8-AIN9
+
+        We return:
+          (diff_channel_index, polarity_sign)
+        polarity_sign is +1 if ADC's AIN+ corresponds to `pos`, else -1.
+        """
+        if abs(pos - neg) != 1:
+            raise ValueError(f"diff pair must be adjacent INx numbers (got {pos} and {neg})")
+        base = min(pos, neg)
+        if base % 2 != 0:
+            # normalize so base is even
+            base = min(pos, neg) - 1
+        ch = base // 2
+        if ch < 0 or ch > 4:
+            raise ValueError(f"IN pair {pos}/{neg} not supported by ADS1263 diff channels")
+
+        adc_pos = ch * 2
+        adc_neg = ch * 2 + 1
+        # ADC always does (AIN{even} - AIN{odd})
+        if pos == adc_pos and neg == adc_neg:
+            return ch, 1.0
+        if pos == adc_neg and neg == adc_pos:
+            return ch, -1.0
+        # Fallback (shouldn't happen due to adjacency check)
+        return ch, 1.0
+
+    def _read_ads1263_diff(self, diff_channel_index: int) -> float:
         self._init_ads1263()
         assert self._adc_mod is not None
         assert self._adc_dev is not None
@@ -99,17 +145,40 @@ class WeightReader:
         if read_one is None:
             raise RuntimeError("ADS1263 channel read method not found")
 
-        values: list[float] = []
-        n = max(1, int(self._cfg.sample_count))
-        for _ in range(n):
-            v_pos = float(read_one(int(self._cfg.channel_pos)))
-            v_neg = float(read_one(int(self._cfg.channel_neg)))
-            values.append(v_pos - v_neg)
-        return sum(values) / len(values)
+        # ADS1263 returns raw ADC codes; we read a single diff channel.
+        v = read_one(int(diff_channel_index))
+        return float(self._to_signed32(int(v)))
 
     def read_raw(self) -> float:
         if self._cfg.driver.lower() == "ads1263" and not self._cfg.simulate:
-            return self._read_ads1263_raw()
+            # Software ratiometric:
+            #   ratio_raw = (SIG+ - SIG-) / (E+ - E-)
+            # Then we calibrate ratio_raw -> kg.
+            ref_ch, ref_sign = self._diff_channel_from_ain_pair(self._cfg.ref_pos, self._cfg.ref_neg)
+            meas_ch, meas_sign = self._diff_channel_from_ain_pair(self._cfg.channel_pos, self._cfg.channel_neg)
+
+            ratios: list[float] = []
+            n = max(1, int(self._cfg.sample_count))
+            for _ in range(n):
+                ref_v = self._read_ads1263_diff(ref_ch) * ref_sign
+                meas_v = self._read_ads1263_diff(meas_ch) * meas_sign
+                if abs(ref_v) < float(self._cfg.min_ref_abs):
+                    # Avoid division blow-ups (e.g. disconnected wiring)
+                    continue
+                ratios.append(meas_v / ref_v)
+
+            if not ratios:
+                raise RuntimeError("failed to compute ratio (no valid ref samples)")
+
+            # Filtering: trim extremes, then average.
+            if self._cfg.trim_fraction > 0 and len(ratios) >= 5:
+                ratios.sort()
+                k = int(len(ratios) * float(self._cfg.trim_fraction))
+                if k > 0 and len(ratios) - 2 * k > 0:
+                    ratios = ratios[k : len(ratios) - k]
+
+            return float(sum(ratios) / len(ratios))
+
         if self._cfg.simulate:
             self._t += 1
             base = 1000.0 + 50.0 * (random.random() - 0.5)
@@ -129,6 +198,7 @@ class WeightReader:
             return Weight(weight=None)
 
     def tare(self) -> float:
+        # Tare sets ratio offset (zero).
         raw = self.read_raw()
         self._cal.offset = float(raw)
         save_calibration(self._cfg.calibration_path, self._cal)
@@ -138,10 +208,10 @@ class WeightReader:
         if known_kg <= 0:
             raise ValueError("known_kg must be > 0")
         raw = self.read_raw()
-        delta = raw - self._cal.offset
+        delta = raw - self._cal.offset  # ratio delta
         if abs(delta) < 1e-9:
             raise RuntimeError("calibration delta too small; check load is applied")
-        self._cal.scale = float(known_kg / delta)
+        self._cal.scale = float(known_kg / delta)  # kg per ratio unit
         save_calibration(self._cfg.calibration_path, self._cal)
         return self._cal.scale
 

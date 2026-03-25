@@ -36,11 +36,17 @@ weight:
   simulate: false
   # Path where ADS1263.py from Waveshare repository is located.
   waveshare_path: "/opt/High-Precision_AD_HAT/python"
-  # Differential channel pair AINx: weight signal = IN(channel_pos) - IN(channel_neg)
-  channel_pos: 0
-  channel_neg: 1
+  # Bridge reference differential inputs (E+ - E-) -> IN0-IN1
+  ref_pos: 0
+  ref_neg: 1
+  # Bridge measurement differential inputs (SIG+ - SIG-) -> IN2-IN3
+  channel_pos: 2
+  channel_neg: 3
   sample_count: 10
   adc_rate: "ADS1263_20SPS"
+  # Ratio filtering
+  trim_fraction: 0.1
+  min_ref_abs: 0.000000001
 
 wifi:
   enabled: true
@@ -53,7 +59,7 @@ lte:
   enabled: true
   # Preferred: ModemManager (mmcli). If not installed, we'll try AT.
   mmcli: "mmcli"
-  at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2", "/dev/ttyUSB3", "/dev/ttyUSB1"]
+  at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2", "/dev/ttyUSB3"]
   at_baud: 115200
   events_enabled: true
   # Fixed AT port for SMS/call events. If null, we auto-detect from at_ports.

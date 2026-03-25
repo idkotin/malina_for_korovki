@@ -29,10 +29,14 @@ def main(argv: list[str] | None = None) -> None:
         calibration_path=cfg.weight.calibration_path,
         simulate=cfg.weight.simulate,
         waveshare_path=cfg.weight.waveshare_path,
+        ref_pos=cfg.weight.ref_pos,
+        ref_neg=cfg.weight.ref_neg,
         channel_pos=cfg.weight.channel_pos,
         channel_neg=cfg.weight.channel_neg,
         sample_count=cfg.weight.sample_count,
         adc_rate=cfg.weight.adc_rate,
+        trim_fraction=cfg.weight.trim_fraction,
+        min_ref_abs=cfg.weight.min_ref_abs,
     )
     wr = WeightReader(wcfg)
 

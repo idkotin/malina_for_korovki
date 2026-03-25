@@ -50,11 +50,20 @@ class WeightCfg(BaseModel):
     simulate: bool = True
     # Path to cloned Waveshare python folder (contains ADS1263.py).
     waveshare_path: str = "/opt/High-Precision_AD_HAT/python"
-    # Differential input pair: IN0-IN1 by default.
-    channel_pos: int = 0
-    channel_neg: int = 1
+    # Bridge reference differential inputs (E+ - E-).
+    # Default wiring: E+ -> IN0, E- -> IN1.
+    ref_pos: int = 0
+    ref_neg: int = 1
+    # Bridge measurement differential inputs (SIG+ - SIG-).
+    # Default wiring: SIG+ -> IN2, SIG- -> IN3.
+    channel_pos: int = 2
+    channel_neg: int = 3
     sample_count: int = 10
     adc_rate: str = "ADS1263_20SPS"
+    # Filtering: trim extremes before averaging ratio.
+    trim_fraction: float = 0.1
+    # Avoid division by ~0 when bridge excitation is absent.
+    min_ref_abs: float = 1e-9
 
 
 class WifiCfg(BaseModel):
