@@ -105,6 +105,7 @@ class ModemEventsReader:
         self._status: dict = {"enabled": cfg.enabled, "running": False}
         self._last_err: str | None = None
         self._lte_snapshot: dict = {"rssi_dbm": None, "access_tech": None, "ts": None}
+        self._pending_call_ts: float | None = None
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -309,6 +310,7 @@ class ModemEventsReader:
                     backoff = 1.0
                     last_lte_poll = 0.0
                     last_sms_poll = 0.0
+                    self._pending_call_ts = None
                     while not self._stop.is_set():
                         now = time.time()
                         if now - last_lte_poll >= 30.0:
@@ -328,6 +330,11 @@ class ModemEventsReader:
                                 self._last_err = str(e)
                                 log.warning("SMS poll error: %s", e)
                             last_sms_poll = now
+
+                        # If we saw RING but never got CLIP, send a fallback call event.
+                        if self._pending_call_ts is not None and (now - self._pending_call_ts) >= 12.0:
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
+                            self._pending_call_ts = None
 
                         raw = ser.readline()
                         if not raw:
@@ -360,14 +367,17 @@ class ModemEventsReader:
                             continue
 
                         if line == "RING":
-                            log.info("CALL URC: RING")
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
+                            # Don't enqueue yet: wait for +CLIP (it contains the phone).
+                            log.info("CALL URC: RING (waiting CLIP)")
+                            self._pending_call_ts = now
                             continue
 
                         m2 = CLIP_RE.match(line)
                         if m2:
-                            log.info("CALL URC: CLIP from=%s", m2.group(1))
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1).strip(), "text": ""})
+                            from_num = m2.group(1).strip()
+                            log.info("CALL URC: CLIP from=%s", from_num)
+                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": from_num, "text": ""})
+                            self._pending_call_ts = None
                             continue
             except Exception as e:
                 self._status["running"] = False
