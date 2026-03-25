@@ -273,13 +273,15 @@ class ModemEventsReader:
 
             flush_current()
 
-            if events and processed_indices:
-                for idx in processed_indices:
-                    try:
-                        _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=5.0)
-                    except Exception:
-                        continue
-                log.info("SMS polled: count=%s deleted=%s", len(events), len(processed_indices))
+            if events:
+                # Some firmwares keep SMS as "REC UNREAD" longer than expected even after
+                # deleting by single index, which can cause duplicates. For stability, clear
+                # all SIM SMS memory after a successful poll batch.
+                try:
+                    _at_cmd(ser, "AT+CMGD=1,4", timeout_s=10.0)
+                except Exception:
+                    pass
+                log.info("SMS polled: count=%s cleared_all=true", len(events))
                 return events
 
             # If modem reports full/err, clear and retry.
@@ -344,7 +346,8 @@ class ModemEventsReader:
                             continue
 
                         m = SMS_INDEX_RE.match(line)
-                        if m:
+                        # When polling is enabled, we avoid processing +CMTI URC to prevent duplicates.
+                        if m and float(self._cfg.sms_poll_interval_s) <= 0.0:
                             try:
                                 idx = int(m.group(1))
                                 log.info("CMTI indication: idx=%s", idx)
