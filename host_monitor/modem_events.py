@@ -222,62 +222,79 @@ class ModemEventsReader:
 
     def _poll_unread_sms(self, ser: serial.Serial) -> list[dict]:
         # Use CMGL="REC UNREAD" to avoid dependency on +CMTI URC.
-        out = _at_cmd(ser, 'AT+CMGL="REC UNREAD"', timeout_s=15.0)
-
-        events: list[dict] = []
-        current_idx: int | None = None
-        current_from: str = ""
-        current_text_lines: list[str] = []
-        processed_indices: list[int] = []
-
-        def flush_current() -> None:
-            nonlocal current_idx, current_from, current_text_lines
-            if current_idx is None:
-                return
-            text = "\n".join(current_text_lines).strip()
-            text = decode_maybe_ucs2(text)
-            events.append(
-                {"type": "sms", "timestamp": utc_now_iso(), "from": current_from, "text": text}
-            )
-            processed_indices.append(current_idx)
-            current_idx = None
-            current_from = ""
-            current_text_lines = []
-
+        last_out: list[str] = []
         phone_re = re.compile(r"^\+?\d{5,15}$")
-        for ln in out:
-            if ln.startswith("+CMGL:"):
-                flush_current()
-                m_idx = re.search(r"^\+CMGL:\s*(\d+)", ln)
-                current_idx = int(m_idx.group(1)) if m_idx else None
 
-                quoted = re.findall(r'"([^"]*)"', ln)
-                phone = ""
-                for q in quoted:
-                    if phone_re.match(q.strip()):
-                        phone = q.strip()
-                        break
-                if not phone and len(quoted) >= 2:
-                    phone = quoted[1].strip()
-                current_from = phone
-            else:
-                if current_idx is not None:
-                    # Message text can be multiple lines.
-                    current_text_lines.append(ln)
+        for attempt in range(3):
+            out = _at_cmd(ser, 'AT+CMGL="REC UNREAD"', timeout_s=15.0)
+            last_out = out
 
-        flush_current()
+            events: list[dict] = []
+            current_idx: int | None = None
+            current_from: str = ""
+            current_text_lines: list[str] = []
+            processed_indices: list[int] = []
 
-        if processed_indices:
-            # Delete only processed SMS entries (prevents duplicates).
-            for idx in processed_indices:
+            def flush_current() -> None:
+                nonlocal current_idx, current_from, current_text_lines
+                if current_idx is None:
+                    return
+                text = "\n".join(current_text_lines).strip()
+                text = decode_maybe_ucs2(text)
+                events.append(
+                    {"type": "sms", "timestamp": utc_now_iso(), "from": current_from, "text": text}
+                )
+                processed_indices.append(current_idx)
+                current_idx = None
+                current_from = ""
+                current_text_lines = []
+
+            for ln in out:
+                if ln.startswith("+CMGL:"):
+                    flush_current()
+                    m_idx = re.search(r"^\+CMGL:\s*(\d+)", ln)
+                    current_idx = int(m_idx.group(1)) if m_idx else None
+
+                    quoted = re.findall(r'"([^"]*)"', ln)
+                    phone = ""
+                    for q in quoted:
+                        if phone_re.match(q.strip()):
+                            phone = q.strip()
+                            break
+                    if not phone and len(quoted) >= 2:
+                        phone = quoted[1].strip()
+                    current_from = phone
+                else:
+                    if current_idx is not None:
+                        current_text_lines.append(ln)
+
+            flush_current()
+
+            if events and processed_indices:
+                for idx in processed_indices:
+                    try:
+                        _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=5.0)
+                    except Exception:
+                        continue
+                log.info("SMS polled: count=%s deleted=%s", len(events), len(processed_indices))
+                return events
+
+            # If modem reports full/err, clear and retry.
+            upper = "\n".join(out).upper()
+            if ("SMS FULL" in upper) or any("ERROR" == x for x in out) or ("+CMS ERROR" in upper):
                 try:
-                    _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=5.0)
+                    _at_cmd(ser, "AT+CMGD=1,4", timeout_s=10.0)
                 except Exception:
-                    continue
+                    pass
+                continue
 
-        if events:
-            log.info("SMS polled: count=%s deleted=%s", len(events), len(processed_indices))
-        return events
+            # No events and no clear reason.
+            break
+
+        # Give caller empty list; include last_out in logs for debugging.
+        if last_out:
+            log.info("SMS polled: no events (last_out_head=%s)", (last_out[:5]))
+        return []
 
     def _run(self) -> None:
         backoff = 1.0
