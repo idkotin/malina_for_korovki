@@ -68,9 +68,11 @@ def decode_maybe_ucs2(text: str) -> str:
     if len(t) >= 2 and t[0] == '"' and t[-1] == '"':
         t = t[1:-1].strip()
 
-    if len(t) >= 4 and (len(t) % 2 == 0) and HEX_RE.match(t):
+    # Some firmwares insert whitespace into UCS2 hex.
+    t_compact = "".join(ch for ch in t if not ch.isspace())
+    if len(t_compact) >= 4 and (len(t_compact) % 2 == 0) and HEX_RE.match(t_compact):
         try:
-            b = bytes.fromhex(t)
+            b = bytes.fromhex(t_compact)
             decoded = b.decode("utf-16-be", errors="strict")
             return decoded.replace("\x00", "").strip()
         except Exception:
@@ -218,8 +220,6 @@ class ModemEventsReader:
 
         self._lte_snapshot = {"rssi_dbm": rssi_dbm, "access_tech": tech, "ts": utc_now_iso()}
 
-    _CMGL_HEADER_RE = re.compile(r'^\+CMGL:\s*(\d+),\s*"[^"]*",\s*"([^"]*)"')
-
     def _poll_unread_sms(self, ser: serial.Serial) -> list[dict]:
         # Use CMGL="REC UNREAD" to avoid dependency on +CMTI URC.
         out = _at_cmd(ser, 'AT+CMGL="REC UNREAD"', timeout_s=15.0)
@@ -228,6 +228,7 @@ class ModemEventsReader:
         current_idx: int | None = None
         current_from: str = ""
         current_text_lines: list[str] = []
+        processed_indices: list[int] = []
 
         def flush_current() -> None:
             nonlocal current_idx, current_from, current_text_lines
@@ -238,22 +239,27 @@ class ModemEventsReader:
             events.append(
                 {"type": "sms", "timestamp": utc_now_iso(), "from": current_from, "text": text}
             )
+            processed_indices.append(current_idx)
             current_idx = None
             current_from = ""
             current_text_lines = []
 
+        phone_re = re.compile(r"^\+?\d{5,15}$")
         for ln in out:
             if ln.startswith("+CMGL:"):
                 flush_current()
-                m = self._CMGL_HEADER_RE.match(ln)
-                if m:
-                    current_idx = int(m.group(1))
-                    current_from = m.group(2).strip()
-                else:
-                    # Unknown format: skip this message.
-                    current_idx = None
-                    current_from = ""
-                    current_text_lines = []
+                m_idx = re.search(r"^\+CMGL:\s*(\d+)", ln)
+                current_idx = int(m_idx.group(1)) if m_idx else None
+
+                quoted = re.findall(r'"([^"]*)"', ln)
+                phone = ""
+                for q in quoted:
+                    if phone_re.match(q.strip()):
+                        phone = q.strip()
+                        break
+                if not phone and len(quoted) >= 2:
+                    phone = quoted[1].strip()
+                current_from = phone
             else:
                 if current_idx is not None:
                     # Message text can be multiple lines.
@@ -261,19 +267,16 @@ class ModemEventsReader:
 
         flush_current()
 
-        # Delete processed SMS entries.
-        for ev in events:
-            # We don't store idx in ev, so re-read by parsing is expensive.
-            # Instead: delete all SMS memory periodically in parallel loop.
-            # Here we only delete specific indices if we can parse them from text length,
-            # but we can't. So we just best-effort clear all when poll finds something.
-            pass
+        if processed_indices:
+            # Delete only processed SMS entries (prevents duplicates).
+            for idx in processed_indices:
+                try:
+                    _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=5.0)
+                except Exception:
+                    continue
 
         if events:
-            # Clear inbox to avoid re-sending the same unread SMS.
-            # This is safe because this modem is dedicated to the project.
-            _at_cmd(ser, "AT+CMGD=1,4", timeout_s=10.0)
-
+            log.info("SMS polled: count=%s deleted=%s", len(events), len(processed_indices))
         return events
 
     def _run(self) -> None:
