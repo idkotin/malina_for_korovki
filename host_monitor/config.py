@@ -79,6 +79,8 @@ class LteCfg(BaseModel):
     at_baud: int = 115200
     events_port: str | None = None
     events_enabled: bool = True
+    # Periodically poll SIM memory for unread SMS (robust fallback if +CMTI URC missing).
+    sms_poll_interval_s: float = 30.0
 
 
 class LoggingCfg(BaseModel):

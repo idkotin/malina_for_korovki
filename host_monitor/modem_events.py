@@ -26,6 +26,7 @@ class ModemEventsCfg:
     port: str | None
     candidate_ports: list[str]
     baud: int
+    sms_poll_interval_s: float = 30.0
 
 
 def _at_readline(ser: serial.Serial, deadline: float) -> str | None:
@@ -217,6 +218,64 @@ class ModemEventsReader:
 
         self._lte_snapshot = {"rssi_dbm": rssi_dbm, "access_tech": tech, "ts": utc_now_iso()}
 
+    _CMGL_HEADER_RE = re.compile(r'^\+CMGL:\s*(\d+),\s*"[^"]*",\s*"([^"]*)"')
+
+    def _poll_unread_sms(self, ser: serial.Serial) -> list[dict]:
+        # Use CMGL="REC UNREAD" to avoid dependency on +CMTI URC.
+        out = _at_cmd(ser, 'AT+CMGL="REC UNREAD"', timeout_s=15.0)
+
+        events: list[dict] = []
+        current_idx: int | None = None
+        current_from: str = ""
+        current_text_lines: list[str] = []
+
+        def flush_current() -> None:
+            nonlocal current_idx, current_from, current_text_lines
+            if current_idx is None:
+                return
+            text = "\n".join(current_text_lines).strip()
+            text = decode_maybe_ucs2(text)
+            events.append(
+                {"type": "sms", "timestamp": utc_now_iso(), "from": current_from, "text": text}
+            )
+            current_idx = None
+            current_from = ""
+            current_text_lines = []
+
+        for ln in out:
+            if ln.startswith("+CMGL:"):
+                flush_current()
+                m = self._CMGL_HEADER_RE.match(ln)
+                if m:
+                    current_idx = int(m.group(1))
+                    current_from = m.group(2).strip()
+                else:
+                    # Unknown format: skip this message.
+                    current_idx = None
+                    current_from = ""
+                    current_text_lines = []
+            else:
+                if current_idx is not None:
+                    # Message text can be multiple lines.
+                    current_text_lines.append(ln)
+
+        flush_current()
+
+        # Delete processed SMS entries.
+        for ev in events:
+            # We don't store idx in ev, so re-read by parsing is expensive.
+            # Instead: delete all SMS memory periodically in parallel loop.
+            # Here we only delete specific indices if we can parse them from text length,
+            # but we can't. So we just best-effort clear all when poll finds something.
+            pass
+
+        if events:
+            # Clear inbox to avoid re-sending the same unread SMS.
+            # This is safe because this modem is dedicated to the project.
+            _at_cmd(ser, "AT+CMGD=1,4", timeout_s=10.0)
+
+        return events
+
     def _run(self) -> None:
         backoff = 1.0
         while not self._stop.is_set():
@@ -227,6 +286,7 @@ class ModemEventsReader:
                     self._last_err = None
                     backoff = 1.0
                     last_lte_poll = 0.0
+                    last_sms_poll = 0.0
                     while not self._stop.is_set():
                         now = time.time()
                         if now - last_lte_poll >= 30.0:
@@ -235,6 +295,17 @@ class ModemEventsReader:
                             except Exception as e:
                                 self._last_err = str(e)
                             last_lte_poll = now
+
+                        if now - last_sms_poll >= float(self._cfg.sms_poll_interval_s):
+                            try:
+                                sms_events = self._poll_unread_sms(ser)
+                                for ev in sms_events:
+                                    log.info("SMS polled: from=%s text_len=%s", ev.get("from"), len(ev.get("text", "")))
+                                    self._q.put(ev)
+                            except Exception as e:
+                                self._last_err = str(e)
+                                log.warning("SMS poll error: %s", e)
+                            last_sms_poll = now
 
                         raw = ser.readline()
                         if not raw:

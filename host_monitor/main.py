@@ -71,6 +71,7 @@ def main(argv: list[str] | None = None) -> None:
             port=cfg.lte.events_port,
             candidate_ports=cfg.lte.at_ports,
             baud=cfg.lte.at_baud,
+            sms_poll_interval_s=cfg.lte.sms_poll_interval_s,
         )
     )
     events_reader.start()
