@@ -160,7 +160,7 @@ def main(argv: list[str] | None = None) -> None:
                     batch = telemetry_q.peek_batch(cfg.send.max_batch)
                     if batch:
                         ids = [rid for rid, _ in batch]
-                        sender.send_json_string_batch([p for _, p in batch])
+                        sender.send_batch([p for _, p in batch])
                         telemetry_q.delete_ids(ids)
                     telemetry_flush_backoff_s = 1.0
                 except Exception as e:
