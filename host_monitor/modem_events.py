@@ -145,6 +145,7 @@ class ModemEventsReader:
                 ser = serial.Serial(p, baudrate=self._cfg.baud, timeout=1.0)
                 # Basic probe
                 _at_cmd(ser, "AT")
+                log.info("AT port selected: %s baud=%s", p, self._cfg.baud)
                 return ser
             except Exception as e:
                 last_exc = e
@@ -157,7 +158,8 @@ class ModemEventsReader:
         _at_cmd(ser, "AT+CMGF=1")
         # Force SIM storage (often "SM") so that +CMTI indices match CMGR.
         _at_cmd(ser, 'AT+CPMS="SM","SM","SM"')
-        _at_cmd(ser, "AT+CSCS=\"GSM\"")
+        # Use UCS2 output; then we decode HEX/utf-16-be with decode_maybe_ucs2().
+        _at_cmd(ser, 'AT+CSCS="UCS2"')
         _at_cmd(ser, "AT+CLIP=1")
         # Clear SIM SMS memory on startup to avoid SMS FULL and old unread messages.
         _at_cmd(ser, "AT+CMGD=1,4", timeout_s=3.0)
@@ -181,9 +183,10 @@ class ModemEventsReader:
                 text_lines.append(ln)
         if not header:
             return None
-        # +CMGR: "REC UNREAD","+7999...",...,"26/03/25,15:28:16+12"
-        m = re.search(r'^\+CMGR:\s*\"[^\"]*\",\s*\"?([^\"]*)\"?', header)
-        from_num = m.group(1).strip() if m else ""
+        # +CMGR: "REC UNREAD","+7999...",...,"timestamp"
+        quoted = re.findall(r'"([^"]*)"', header)
+        # quoted[0]=status, quoted[1]=phone, quoted[2]=subaddress (often ""), ...
+        from_num = quoted[1].strip() if len(quoted) >= 2 else ""
         text = "\n".join(text_lines).strip() if text_lines else ""
         text = decode_maybe_ucs2(text)
         # Best effort: delete after read to avoid memory filling up
@@ -264,11 +267,13 @@ class ModemEventsReader:
                             continue
 
                         if line == "RING":
+                            log.info("CALL URC: RING")
                             self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
                             continue
 
                         m2 = CLIP_RE.match(line)
                         if m2:
+                            log.info("CALL URC: CLIP from=%s", m2.group(1))
                             self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": m2.group(1).strip(), "text": ""})
                             continue
             except Exception as e:
