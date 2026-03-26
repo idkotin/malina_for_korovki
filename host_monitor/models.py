@@ -9,6 +9,7 @@ class Position(BaseModel):
     lat: float | None = None
     lon: float | None = None
     quality: int | None = None  # 0=no fix, 1=GPS fix, 2=DGPS...
+    satellites: int | None = None
 
 
 class Weight(BaseModel):
@@ -29,6 +30,7 @@ class Telemetry(BaseModel):
     timestamp: str
     lat: float = 0.0
     lon: float = 0.0
+    gps_satellites: int = 0
     weight: float = 0.0
     gps_quality: int = 0
     wifi_clients: list[str] = Field(default_factory=list)

@@ -58,6 +58,27 @@ def _at_cmd(ser: serial.Serial, cmd: str, timeout_s: float = 1.5) -> list[str]:
     return lines
 
 
+def _at_ping_ok(ser: serial.Serial, timeout_s: float = 1.5) -> bool:
+    """
+    Confirm that the selected serial port is a real AT command port.
+    We treat the port as valid only if the modem explicitly returns OK.
+    """
+    ser.reset_input_buffer()
+    ser.reset_output_buffer()
+    ser.write(b"AT\r")
+    ser.flush()
+
+    deadline = time.time() + timeout_s
+    while True:
+        line = _at_readline(ser, deadline)
+        if line is None:
+            return False
+        if line == "OK":
+            return True
+        if line.startswith("ERROR"):
+            return False
+
+
 def decode_maybe_ucs2(text: str) -> str:
     """
     Some operators send UCS2/UTF-16-BE as HEX string.
@@ -147,8 +168,10 @@ class ModemEventsReader:
         for p in ports:
             try:
                 ser = serial.Serial(p, baudrate=self._cfg.baud, timeout=1.0)
-                # Basic probe
-                _at_cmd(ser, "AT")
+                # Basic probe: only accept ports that explicitly answer "OK" to AT.
+                if not _at_ping_ok(ser):
+                    ser.close()
+                    continue
                 log.info("AT port selected: %s baud=%s", p, self._cfg.baud)
                 return ser
             except Exception as e:

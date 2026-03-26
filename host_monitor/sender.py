@@ -52,6 +52,11 @@ class Sender:
         r = self._client.post(self._url, content=payload_json.encode("utf-8"), headers={"Content-Type": "application/json"})
         r.raise_for_status()
 
+    def send_buffered_telemetry_one(self, payload_json: str) -> None:
+        payload = json.loads(payload_json)
+        payload = _sanitize_telemetry_payload(payload)
+        self.send_one(payload)
+
     def send_batch(self, payload_json_list: list[str]) -> None:
         # For now we send as individual POSTs. Easy to change later to a batch endpoint.
         for s in payload_json_list:

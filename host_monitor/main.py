@@ -160,9 +160,9 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     batch = telemetry_q.peek_batch(cfg.send.max_batch)
                     if batch:
-                        ids = [rid for rid, _ in batch]
-                        sender.send_batch([p for _, p in batch])
-                        telemetry_q.delete_ids(ids)
+                        for rid, payload_json in batch:
+                            sender.send_buffered_telemetry_one(payload_json)
+                            telemetry_q.delete_ids([rid])
                     telemetry_flush_backoff_s = 1.0
                 except Exception as e:
                     module_status["telemetry_flush_error"] = str(e)
@@ -173,9 +173,9 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     batch = events_q.peek_batch(cfg.events.max_batch)
                     if batch:
-                        ids = [rid for rid, _ in batch]
-                        events_sender.send_json_string_batch([p for _, p in batch])
-                        events_q.delete_ids(ids)
+                        for rid, payload_json in batch:
+                            events_sender.send_json_string_one(payload_json)
+                            events_q.delete_ids([rid])
                     events_flush_backoff_s = 1.0
                 except Exception as e:
                     module_status["events_flush_error"] = str(e)

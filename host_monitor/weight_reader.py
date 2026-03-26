@@ -12,6 +12,7 @@ from host_monitor.models import Weight
 
 
 log = logging.getLogger("host_monitor.weight")
+ADC_FULL_SCALE = float(0x7FFFFFFF)
 
 
 @dataclass(frozen=True)
@@ -59,9 +60,10 @@ def save_calibration(path: str, cal: ScaleCalibration) -> None:
 
 class WeightReader:
     """
-    Placeholder until ADC HAT arrives.
-    - When simulate=true, returns a slowly changing fake value.
-    - When enabled but not implemented, returns error.
+    Weight pipeline for ADS1263:
+    - real ADS1263 path with external bridge reference sense
+    - calibration persisted as offset + scale
+    - optional simulation path for bench tests without hardware
     """
 
     def __init__(self, cfg: WeightCfg):
@@ -71,6 +73,8 @@ class WeightReader:
         self._adc_mod: ModuleType | None = None
         self._adc_dev = None
         self._adc_ready = False
+        self._ads1263_measurement_channel: int | None = None
+        self._ads1263_measurement_sign = 1.0
 
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
@@ -90,7 +94,10 @@ class WeightReader:
         self._adc_mod = ADS1263
         self._adc_dev = ADS1263.ADS1263()
         # Rate string is from Waveshare examples, e.g. ADS1263_20SPS
-        self._adc_dev.ADS1263_init_ADC1(self._cfg.adc_rate)
+        init_result = self._adc_dev.ADS1263_init_ADC1(self._cfg.adc_rate)
+        if init_result == -1:
+            raise RuntimeError("ADS1263_init_ADC1 failed")
+        self._configure_ads1263_weight_mode()
         self._adc_ready = True
         log.info("ADS1263 initialized rate=%s", self._cfg.adc_rate)
 
@@ -133,6 +140,65 @@ class WeightReader:
         # Fallback (shouldn't happen due to adjacency check)
         return ch, 1.0
 
+    def _refmux_from_ain_pair(self, pos: int, neg: int) -> tuple[int, bool]:
+        """
+        ADS1263 ADC1 external reference accepts only AIN0/AIN1, AIN2/AIN3, AIN4/AIN5.
+        REFMUX uses RMUXP bits [5:3] and RMUXN bits [2:0].
+        """
+        ref_reverse = False
+        if (pos, neg) == (0, 1):
+            rmux_p, rmux_n = 0x01, 0x01
+        elif (pos, neg) == (1, 0):
+            rmux_p, rmux_n = 0x01, 0x01
+            ref_reverse = True
+        elif (pos, neg) == (2, 3):
+            rmux_p, rmux_n = 0x02, 0x02
+        elif (pos, neg) == (3, 2):
+            rmux_p, rmux_n = 0x02, 0x02
+            ref_reverse = True
+        elif (pos, neg) == (4, 5):
+            rmux_p, rmux_n = 0x03, 0x03
+        elif (pos, neg) == (5, 4):
+            rmux_p, rmux_n = 0x03, 0x03
+            ref_reverse = True
+        else:
+            raise ValueError(
+                "ADS1263 external reference supports only AIN0/AIN1, AIN2/AIN3, or AIN4/AIN5 "
+                f"(got {pos}/{neg})"
+            )
+        return (rmux_p << 3) | rmux_n, ref_reverse
+
+    def _configure_ads1263_weight_mode(self) -> None:
+        assert self._adc_mod is not None
+        assert self._adc_dev is not None
+
+        regs = getattr(self._adc_mod, "ADS1263_REG", None)
+        cmds = getattr(self._adc_mod, "ADS1263_CMD", None)
+        if regs is None or cmds is None:
+            raise RuntimeError("ADS1263 register definitions not found in Waveshare module")
+
+        meas_ch, meas_sign = self._diff_channel_from_ain_pair(self._cfg.channel_pos, self._cfg.channel_neg)
+        refmux, ref_reverse = self._refmux_from_ain_pair(self._cfg.ref_pos, self._cfg.ref_neg)
+
+        # Stop conversions before changing ADC1 routing.
+        self._adc_dev.ADS1263_WriteCmd(cmds["CMD_STOP1"])
+        # Use differential mode so ADS1263_GetChannalValue(1) means IN2-IN3.
+        self._adc_dev.ADS1263_SetMode(1)
+        # MODE0 bit7 is REFREV in the ADS1263 datasheet; set it only if the config swaps ref polarity.
+        mode0 = int(self._adc_dev.ADS1263_ReadData(regs["REG_MODE0"])[0])
+        mode0 = (mode0 | 0x80) if ref_reverse else (mode0 & 0x7F)
+        self._adc_dev.ADS1263_WriteReg(regs["REG_MODE0"], mode0)
+        # Reference is sensed from the existing machine bridge excitation (E+ -> IN0, E- -> IN1).
+        self._adc_dev.ADS1263_WriteReg(regs["REG_REFMUX"], refmux)
+        readback = int(self._adc_dev.ADS1263_ReadData(regs["REG_REFMUX"])[0])
+        if readback != refmux:
+            raise RuntimeError(f"failed to set ADS1263 REFMUX to external reference (got 0x{readback:02x})")
+        # Prime the measurement input mux to the configured bridge signal pair.
+        self._adc_dev.ADS1263_SetDiffChannal(meas_ch)
+        self._adc_dev.ADS1263_WriteCmd(cmds["CMD_START1"])
+        self._ads1263_measurement_channel = meas_ch
+        self._ads1263_measurement_sign = meas_sign
+
     def _read_ads1263_diff(self, diff_channel_index: int) -> float:
         self._init_ads1263()
         assert self._adc_mod is not None
@@ -149,35 +215,35 @@ class WeightReader:
         v = read_one(int(diff_channel_index))
         return float(self._to_signed32(int(v)))
 
-    def read_raw(self) -> float:
-        if self._cfg.driver.lower() == "ads1263" and not self._cfg.simulate:
-            # Software ratiometric:
-            #   ratio_raw = (SIG+ - SIG-) / (E+ - E-)
-            # Then we calibrate ratio_raw -> kg.
-            ref_ch, ref_sign = self._diff_channel_from_ain_pair(self._cfg.ref_pos, self._cfg.ref_neg)
-            meas_ch, meas_sign = self._diff_channel_from_ain_pair(self._cfg.channel_pos, self._cfg.channel_neg)
+    def read_raw_counts(self) -> int:
+        if self._cfg.driver.lower() != "ads1263" or self._cfg.simulate:
+            raise RuntimeError("raw ADS1263 counts are available only for the real ADS1263 driver")
+        self._init_ads1263()
+        assert self._ads1263_measurement_channel is not None
+        counts = float(self._read_ads1263_diff(self._ads1263_measurement_channel))
+        return int(counts * self._ads1263_measurement_sign)
 
-            ratios: list[float] = []
+    def read_ratio(self) -> float:
+        if self._cfg.driver.lower() == "ads1263" and not self._cfg.simulate:
+            counts: list[int] = []
             n = max(1, int(self._cfg.sample_count))
             for _ in range(n):
-                ref_v = self._read_ads1263_diff(ref_ch) * ref_sign
-                meas_v = self._read_ads1263_diff(meas_ch) * meas_sign
-                if abs(ref_v) < float(self._cfg.min_ref_abs):
-                    # Avoid division blow-ups (e.g. disconnected wiring)
-                    continue
-                ratios.append(meas_v / ref_v)
+                counts.append(self.read_raw_counts())
 
-            if not ratios:
-                raise RuntimeError("failed to compute ratio (no valid ref samples)")
+            if self._cfg.trim_fraction > 0 and len(counts) >= 5:
+                counts.sort()
+                k = int(len(counts) * float(self._cfg.trim_fraction))
+                if k > 0 and len(counts) - 2 * k > 0:
+                    counts = counts[k : len(counts) - k]
 
-            # Filtering: trim extremes, then average.
-            if self._cfg.trim_fraction > 0 and len(ratios) >= 5:
-                ratios.sort()
-                k = int(len(ratios) * float(self._cfg.trim_fraction))
-                if k > 0 and len(ratios) - 2 * k > 0:
-                    ratios = ratios[k : len(ratios) - k]
+            avg_counts = float(sum(counts) / len(counts))
+            # With REFMUX on IN0/IN1 the ADC code is already normalized to bridge excitation.
+            return avg_counts / ADC_FULL_SCALE
+        raise RuntimeError("ratio is available only for the real ADS1263 driver")
 
-            return float(sum(ratios) / len(ratios))
+    def read_raw(self) -> float:
+        if self._cfg.driver.lower() == "ads1263" and not self._cfg.simulate:
+            return self.read_ratio()
 
         if self._cfg.simulate:
             self._t += 1

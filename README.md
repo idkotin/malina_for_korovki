@@ -1,16 +1,18 @@
 # host-monitor (Raspberry Pi)
 
-Telemetry client for Raspberry Pi + SIM7600 + ADS1263.
+Russian version: [README.ru.md](./README.ru.md)
+
+Telemetry client for Raspberry Pi 4 + SIM7600 + Waveshare ADS1263.
 
 - Sends telemetry via HTTP POST (JSON) at configured frequency
-- Buffers unsent telemetry/events in SQLite (FIFO) during network outages
+- Buffers unsent telemetry and modem events in SQLite during outages
 - Reads GPS from modem serial ports with auto-detect
-- Reads SMS/call events from AT port and sends to separate API
-- Supports ADS1263 load-cell path with calibration file
+- Reads SMS/call events from the modem AT port and sends them to a separate API
+- Reads weight from a passive parallel tap of an existing load-cell system
 
 ## 1) Telemetry JSON format
 
-Current telemetry payload is flat and clean:
+Current telemetry payload:
 
 ```json
 {
@@ -18,6 +20,7 @@ Current telemetry payload is flat and clean:
   "timestamp": "2026-03-11T20:34:38",
   "lat": 55.109311,
   "lon": 82.812417,
+  "gps_satellites": 12,
   "weight": 1234.56,
   "gps_quality": 1,
   "wifi_clients": ["aa:bb:cc:dd:ee:ff"],
@@ -27,7 +30,7 @@ Current telemetry payload is flat and clean:
 }
 ```
 
-SMS/call events use separate endpoint (`events.url`):
+SMS/call events use a separate endpoint (`events.url`):
 
 ```json
 {
@@ -39,7 +42,7 @@ SMS/call events use separate endpoint (`events.url`):
 }
 ```
 
-Call event example (same schema, empty `text`):
+Call event example:
 
 ```json
 {
@@ -58,7 +61,7 @@ sudo apt update
 sudo apt install -y python3 python3-pip python3-venv git hostapd modemmanager
 ```
 
-Enable SPI (required for ADS1263):
+Enable SPI for ADS1263:
 
 ```bash
 sudo raspi-config
@@ -66,7 +69,7 @@ sudo raspi-config
 sudo reboot
 ```
 
-Clone project and install (use a **venv** — Raspberry Pi OS blocks system-wide `pip` with PEP 668):
+Clone project and install it in a virtual environment:
 
 ```bash
 sudo mkdir -p /opt
@@ -80,13 +83,13 @@ pip install -U pip
 pip install .
 ```
 
-After install, run the app with the venv Python (or activate first):
+Run manually with the venv Python:
 
 ```bash
 /opt/host-monitor/.venv/bin/python -m host_monitor.main --config /opt/host-monitor/config.yaml
 ```
 
-Install Waveshare ADS1263 python library:
+Install the Waveshare ADS1263 Python library:
 
 ```bash
 cd /opt
@@ -108,24 +111,77 @@ Important fields:
 
 - `send.url`: telemetry API URL
 - `events.url`: SMS/call events API URL
-- `send.interval_s`: telemetry period (0.5 means 2 packets per second)
-- `gps.port`: fixed GPS ttyUSB port (`null` for auto-detect)
-- `gps.port_candidates`: all potential GPS ports
-- `lte.at_ports`: all potential AT ports
-- `weight.enabled`: enable/disable load-cell processing
-- `weight.simulate`: if true, use generated fake value
+- `send.interval_s`: telemetry period
+- `gps.port`: fixed GPS serial port (`null` for auto-detect)
+- `gps.port_candidates`: candidate GPS ports
+- `lte.at_ports`: candidate AT ports
+- `weight.enabled`: enable or disable weight reading
+- `weight.simulate`: use a fake weight value instead of the ADC
+- `weight.ref_pos` / `weight.ref_neg`: ADC reference sense pair
+- `weight.channel_pos` / `weight.channel_neg`: ADC measurement pair
 
-## 4) Run manually
+Default load-cell wiring in config:
+
+```yaml
+weight:
+  ref_pos: 0
+  ref_neg: 1
+  channel_pos: 2
+  channel_neg: 3
+```
+
+## 4) Existing load-cell system integration
+
+This project is designed for a passive parallel measurement path on an existing agricultural machine.
+
+- The factory weighing terminal stays connected and keeps exciting the bridge
+- This project does not replace the factory terminal
+- This project does not power the bridge from the ADS1263 board
+- The ADS1263 only senses the existing excitation and the bridge output
+
+Hardware assumptions:
+
+- The machine already has 3 load cells connected through a summing/junction box
+- We tap the cable after the summing box, in parallel with the factory weighing terminal
+- Available lines are `E+`, `E-`, `SIG+`, `SIG-`, and `shield/drain`
+- The bridge excitation is expected to come from the factory terminal
+
+Electrical connection from the summing box output to the ADS1263 HAT:
+
+- `E+` -> `IN0`
+- `E-` -> `IN1`
+- `SIG+` -> `IN2`
+- `SIG-` -> `IN3`
+- `shield/drain` -> keep it as shield continuity; do not use it as a signal conductor
+
+ADC behavior in this project:
+
+- Differential measurement input is `IN2 - IN3`
+- External differential reference is `IN0 - IN1`
+- The ADC treats `E+ / E-` only as reference sense
+- The ADC does not drive `E+ / E-`
+- This is not an HX711-style bridge-powering setup
+
+Grounding note:
+
+- Do not use shield as `SIG-` or `E-`
+- Connect shield to your local ground only if that matches the machine grounding scheme and does not create a ground loop
+
+## 5) Run manually
 
 ```bash
 cd /opt/host-monitor
 source .venv/bin/activate
 host-monitor --config ./config.yaml
-# or without activate:
-# /opt/host-monitor/.venv/bin/host-monitor --config ./config.yaml
 ```
 
-## 5) Run as systemd service
+Without activating the environment:
+
+```bash
+/opt/host-monitor/.venv/bin/host-monitor --config ./config.yaml
+```
+
+## 6) Run as a systemd service
 
 ```bash
 sudo cp /opt/host-monitor/systemd/host-monitor.service /etc/systemd/system/host-monitor.service
@@ -141,9 +197,9 @@ sudo systemctl restart host-monitor
 sudo systemctl stop host-monitor
 ```
 
-## 6) Logs
+## 7) Logs
 
-Service logs (journald):
+Service logs:
 
 ```bash
 journalctl -u host-monitor -f
@@ -155,27 +211,14 @@ File logs:
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
-## 7) ADS1263 wiring (from combiner to AD HAT)
-
-On the AD HAT screw terminals you have: `IN0..IN9`, `AVSS`, `AVDD`, `GND`.
-
-Recommended default (matches config `channel_pos: 0`, `channel_neg: 1`):
-
-- `Combiner SIG+` -> `IN0`
-- `Combiner SIG-` -> `IN1`
-- `Combiner EXC+ (E+)` -> `AVDD`
-- `Combiner EXC- (E-)` -> `AVSS`
-- Shield/ground (if present) -> `GND`
-
-If your combiner labels differ, map by function: `signal +/-` to `INx`, `excitation +/-` to `AVDD/AVSS`.
-
-## 8) Calibration workflow (zero + known weight)
+## 8) Calibration workflow
 
 Before calibration:
 
 - `weight.enabled: true`
 - `weight.simulate: false`
-- Correct wiring is connected
+- The bridge tap is wired correctly
+- The factory weighing terminal is powered and exciting the bridge
 
 Commands:
 
@@ -186,11 +229,11 @@ host-monitor-calibrate --config ./config.yaml tare
 host-monitor-calibrate --config ./config.yaml calibrate --known-kg 100
 ```
 
-Calibration is saved in:
+Calibration is stored in:
 
 - `weight.calibration_path` (default `./data/scale_calibration.json`)
 
-## 9) If no combiner yet
+## 9) If the load-cell tap is not connected yet
 
 Set in config:
 
@@ -199,5 +242,4 @@ weight:
   enabled: false
 ```
 
-Service runs normally, `weight` field will be `null`, no crash.
-
+The service will still run normally. The telemetry packet will keep sending `weight: 0.0`.
