@@ -35,7 +35,7 @@ weight:
   # Keep true for tests without real load cells.
   simulate: false
   # Path where ADS1263.py from Waveshare repository is located.
-  waveshare_path: "/opt/High-Precision_AD_HAT/python"
+  waveshare_path: "/opt/High-Pricision_AD_HAT/python"
   # Bridge reference differential inputs (E+ - E-) -> IN0-IN1
   ref_pos: 0
   ref_neg: 1

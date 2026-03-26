@@ -22,6 +22,7 @@ def build_telemetry(
     lat = position.lat if position.lat is not None else 0.0
     lon = position.lon if position.lon is not None else 0.0
     gps_quality = position.quality if position.quality is not None else 0
+    gps_satellites = position.satellites if position.satellites is not None else 0
     weight_kg = weight.weight if weight.weight is not None else 0.0
 
     lte_rssi = lte.rssi_dbm if lte.rssi_dbm is not None else 0
@@ -32,6 +33,7 @@ def build_telemetry(
         timestamp=utc_now_iso_no_tz(),
         lat=lat,
         lon=lon,
+        gps_satellites=gps_satellites,
         weight=weight_kg,
         gps_quality=gps_quality,
         wifi_clients=wifi_clients,

@@ -59,9 +59,10 @@ class SqliteQueue:
                 (utc_now_iso(), payload_json),
             )
             self._conn.commit()
-            self._trim_if_needed()
         except Exception:
             log.exception("failed to put payload into buffer")
+            raise
+        self._trim_if_needed()
 
     def _trim_if_needed(self) -> None:
         try:

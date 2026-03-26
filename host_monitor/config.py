@@ -49,7 +49,7 @@ class WeightCfg(BaseModel):
     calibration_path: str = "./data/scale_calibration.json"
     simulate: bool = True
     # Path to cloned Waveshare python folder (contains ADS1263.py).
-    waveshare_path: str = "/opt/High-Precision_AD_HAT/python"
+    waveshare_path: str = "/opt/High-Pricision_AD_HAT/python"
     # Bridge reference differential inputs (E+ - E-).
     # Default wiring: E+ -> IN0, E- -> IN1.
     ref_pos: int = 0
