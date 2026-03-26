@@ -226,7 +226,57 @@ File logs:
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
-## 8) Calibration workflow
+## 8) Buffer inspection and cleanup
+
+Install `sqlite3` if it is missing:
+
+```bash
+sudo apt install -y sqlite3
+```
+
+Show how many buffered telemetry/event rows are currently stored:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select 'telemetry' as table_name, count(*) as rows from telemetry union all select 'events', count(*) from events;"
+```
+
+Show the latest buffered telemetry rows:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select id, created_utc, substr(payload_json,1,200) from telemetry order by id desc limit 10;"
+```
+
+Show the latest buffered modem event rows:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select id, created_utc, substr(payload_json,1,200) from events order by id desc limit 10;"
+```
+
+Clear only buffered telemetry rows:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "delete from telemetry;"
+```
+
+Clear only buffered modem event rows:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "delete from events;"
+```
+
+Clear the whole buffer database:
+
+```bash
+cd /opt/host-monitor
+rm -f ./data/buffer.sqlite3 ./data/buffer.sqlite3-shm ./data/buffer.sqlite3-wal
+```
+
+## 9) Calibration workflow
 
 Before calibration:
 
@@ -248,7 +298,7 @@ Calibration is stored in:
 
 - `weight.calibration_path` (default `./data/scale_calibration.json`)
 
-## 9) If the load-cell tap is not connected yet
+## 10) If the load-cell tap is not connected yet
 
 Set in config:
 

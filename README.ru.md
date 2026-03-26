@@ -226,7 +226,57 @@ journalctl -u host-monitor -f
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
-## 8) Калибровка
+## 8) Просмотр и очистка буфера
+
+Если `sqlite3` еще не установлен:
+
+```bash
+sudo apt install -y sqlite3
+```
+
+Показать, сколько сейчас строк лежит в буфере телеметрии и событий:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select 'telemetry' as table_name, count(*) as rows from telemetry union all select 'events', count(*) from events;"
+```
+
+Показать последние буферизованные пакеты телеметрии:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select id, created_utc, substr(payload_json,1,200) from telemetry order by id desc limit 10;"
+```
+
+Показать последние буферизованные события модема:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select id, created_utc, substr(payload_json,1,200) from events order by id desc limit 10;"
+```
+
+Очистить только буфер телеметрии:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "delete from telemetry;"
+```
+
+Очистить только буфер событий модема:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "delete from events;"
+```
+
+Полностью удалить базу буфера:
+
+```bash
+cd /opt/host-monitor
+rm -f ./data/buffer.sqlite3 ./data/buffer.sqlite3-shm ./data/buffer.sqlite3-wal
+```
+
+## 9) Калибровка
 
 Перед калибровкой:
 
@@ -248,7 +298,7 @@ host-monitor-calibrate --config ./config.yaml calibrate --known-kg 100
 
 - `weight.calibration_path` (по умолчанию `./data/scale_calibration.json`)
 
-## 9) Если тензолиния еще не подключена
+## 10) Если тензолиния еще не подключена
 
 Укажи в конфиге:
 

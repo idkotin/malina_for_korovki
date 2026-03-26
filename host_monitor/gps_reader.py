@@ -80,7 +80,31 @@ def _parse_nmea_line(line: str) -> Position | None:
         ok = status == "A"
         return Position(lat=lat, lon=lon, quality=1 if ok else 0)
 
+    if kind.endswith("GNS") and len(parts) >= 8:
+        # $..GNS,time,lat,N,lon,E,mode,num_sats,...
+        latlon = _parse_lat_lon(parts[2], parts[3], parts[4], parts[5])
+        mode = parts[6].upper() if parts[6] else ""
+        satellites = None
+        try:
+            satellites = int(parts[7]) if parts[7] else 0
+        except Exception:
+            satellites = None
+        quality = 1 if any(ch in mode for ch in ("A", "D", "F", "R")) else 0
+        if latlon is None:
+            return Position(quality=quality, satellites=satellites)
+        lat, lon = latlon
+        return Position(lat=lat, lon=lon, quality=quality, satellites=satellites)
+
     return None
+
+
+def _merge_position(base: Position, update: Position) -> Position:
+    return Position(
+        lat=update.lat if update.lat is not None else base.lat,
+        lon=update.lon if update.lon is not None else base.lon,
+        quality=update.quality if update.quality is not None else base.quality,
+        satellites=update.satellites if update.satellites is not None else base.satellites,
+    )
 
 
 class GpsReader:
@@ -171,16 +195,13 @@ class GpsReader:
                             line = raw.decode("ascii", errors="ignore").strip()
                             pos = _parse_nmea_line(line)
                             if pos is not None:
-                                latest_pos = pos
+                                # Keep the freshest coordinates from the latest sentence in this read window,
+                                # but preserve supplemental fields (for example satellites from GGA/GNS)
+                                # when a newer sentence such as RMC does not carry them.
+                                latest_pos = pos if latest_pos is None else _merge_position(latest_pos, pos)
                         if latest_pos is not None:
                             with self._lock:
-                                current = self._latest
-                                self._latest = Position(
-                                    lat=latest_pos.lat if latest_pos.lat is not None else current.lat,
-                                    lon=latest_pos.lon if latest_pos.lon is not None else current.lon,
-                                    quality=latest_pos.quality if latest_pos.quality is not None else current.quality,
-                                    satellites=latest_pos.satellites if latest_pos.satellites is not None else current.satellites,
-                                )
+                                self._latest = _merge_position(self._latest, latest_pos)
                         elif not got_any:
                             time.sleep(0.02)
             except Exception as e:
