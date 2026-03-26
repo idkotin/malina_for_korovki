@@ -30,14 +30,17 @@ class Telemetry(BaseModel):
     timestamp: str
     lat: float = 0.0
     lon: float = 0.0
+    gps_valid: bool = False
     gps_satellites: int = 0
     weight: float = 0.0
+    weight_valid: bool = False
     gps_quality: int = 0
     wifi_clients: list[str] = Field(default_factory=list)
     cpu_temp_c: float = 0.0
     lte_rssi_dbm: int = 0
     # Keep as string contract (e.g. "LTE/auto"), but avoid null.
     lte_access_tech: str = "0"
+    events_reader_ok: bool = False
 
 
 Level = Literal["DEBUG", "INFO", "WARNING", "ERROR"]

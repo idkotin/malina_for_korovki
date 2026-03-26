@@ -26,6 +26,10 @@ def _sanitize_telemetry_payload(payload: dict) -> dict:
         if payload.get(k) is None:
             payload[k] = numeric_zero_int
 
+    for k in ("gps_valid", "weight_valid", "events_reader_ok"):
+        if payload.get(k) is None:
+            payload[k] = False
+
     if payload.get("lte_access_tech") is None:
         payload["lte_access_tech"] = "0"
 

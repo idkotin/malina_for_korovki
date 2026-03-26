@@ -20,15 +20,24 @@ English version: [README.md](./README.md)
   "timestamp": "2026-03-11T20:34:38",
   "lat": 55.109311,
   "lon": 82.812417,
+  "gps_valid": true,
   "gps_satellites": 12,
   "weight": 1234.56,
+  "weight_valid": true,
   "gps_quality": 1,
   "wifi_clients": ["aa:bb:cc:dd:ee:ff"],
   "cpu_temp_c": 61.2,
   "lte_rssi_dbm": -75,
-  "lte_access_tech": "LTE"
+  "lte_access_tech": "LTE",
+  "events_reader_ok": true
 }
 ```
+
+Что означают флаги состояния:
+
+- `gps_valid`: `true`, когда текущие координаты получены из валидного GPS fix
+- `weight_valid`: `true`, когда текущее значение веса считано без ошибки
+- `events_reader_ok`: `true`, когда reader событий модема работает нормально, либо когда события модема отключены в конфиге
 
 SMS и звонки уходят на отдельный endpoint `events.url`:
 
@@ -119,6 +128,12 @@ weight:
 - `weight.simulate`: использовать фейковый вес вместо реального АЦП
 - `weight.ref_pos` / `weight.ref_neg`: пара входов для опорного напряжения
 - `weight.channel_pos` / `weight.channel_neg`: пара входов для сигнала моста
+
+Флаги состояния в телеметрии:
+
+- `gps_valid`: валиден ли текущий GPS fix
+- `weight_valid`: валидно ли текущее значение веса
+- `events_reader_ok`: в порядке ли сейчас reader событий модема
 
 Конфиг по умолчанию для тензо:
 
@@ -242,4 +257,4 @@ weight:
   enabled: false
 ```
 
-Сервис продолжит нормально работать. В телеметрии поле `weight` будет отправляться как `0.0`.
+Сервис продолжит нормально работать. В телеметрии поле `weight` будет отправляться как `0.0`, а `weight_valid` будет `false`.

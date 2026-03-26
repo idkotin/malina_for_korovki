@@ -18,6 +18,9 @@ def build_telemetry(
     wifi_clients: list[str],
     cpu_temp_c: float | None,
     lte: LteInfo,
+    gps_valid: bool,
+    weight_valid: bool,
+    events_reader_ok: bool,
 ) -> Telemetry:
     lat = position.lat if position.lat is not None else 0.0
     lon = position.lon if position.lon is not None else 0.0
@@ -33,12 +36,15 @@ def build_telemetry(
         timestamp=utc_now_iso_no_tz(),
         lat=lat,
         lon=lon,
+        gps_valid=gps_valid,
         gps_satellites=gps_satellites,
         weight=weight_kg,
+        weight_valid=weight_valid,
         gps_quality=gps_quality,
         wifi_clients=wifi_clients,
         cpu_temp_c=cpu_temp_c if cpu_temp_c is not None else 0.0,
         lte_rssi_dbm=lte_rssi,
         lte_access_tech=lte_access_tech,
+        events_reader_ok=events_reader_ok,
     )
 

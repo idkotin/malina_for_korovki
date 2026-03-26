@@ -109,6 +109,12 @@ def main(argv: list[str] | None = None) -> None:
                     LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
                 )
             cpu_temp = read_cpu_temp_c()
+            gps_valid = pos.lat is not None and pos.lon is not None and (pos.quality or 0) > 0
+            weight_valid = w.weight is not None
+            events_status = events_reader.status()
+            events_reader_ok = (not cfg.lte.events_enabled) or (
+                bool(events_status.get("running")) and not events_status.get("last_error")
+            )
 
             module_status = {
                 "gps": gps.status(),
@@ -116,7 +122,7 @@ def main(argv: list[str] | None = None) -> None:
                 "telemetry_buffer_oldest_age_s": telemetry_q.oldest_age_s(),
                 "events_buffer_rows": events_q.count(),
                 "events_buffer_oldest_age_s": events_q.oldest_age_s(),
-                "events_reader": events_reader.status(),
+                "events_reader": events_status,
                 "flush": {
                     "telemetry_backoff_s": telemetry_flush_backoff_s,
                     "events_backoff_s": events_flush_backoff_s,
@@ -132,6 +138,9 @@ def main(argv: list[str] | None = None) -> None:
                 wifi_clients=wifi_clients,
                 cpu_temp_c=cpu_temp,
                 lte=lte,
+                gps_valid=gps_valid,
+                weight_valid=weight_valid,
+                events_reader_ok=events_reader_ok,
             )
             payload = telemetry.model_dump(mode="json")
 

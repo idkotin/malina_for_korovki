@@ -20,15 +20,24 @@ Current telemetry payload:
   "timestamp": "2026-03-11T20:34:38",
   "lat": 55.109311,
   "lon": 82.812417,
+  "gps_valid": true,
   "gps_satellites": 12,
   "weight": 1234.56,
+  "weight_valid": true,
   "gps_quality": 1,
   "wifi_clients": ["aa:bb:cc:dd:ee:ff"],
   "cpu_temp_c": 61.2,
   "lte_rssi_dbm": -75,
-  "lte_access_tech": "LTE"
+  "lte_access_tech": "LTE",
+  "events_reader_ok": true
 }
 ```
+
+Field meaning for health flags:
+
+- `gps_valid`: `true` when current GPS coordinates come from a valid fix
+- `weight_valid`: `true` when the current weight value was read successfully
+- `events_reader_ok`: `true` when the modem events reader is healthy, or when modem events are disabled in config
 
 SMS/call events use a separate endpoint (`events.url`):
 
@@ -119,6 +128,12 @@ Important fields:
 - `weight.simulate`: use a fake weight value instead of the ADC
 - `weight.ref_pos` / `weight.ref_neg`: ADC reference sense pair
 - `weight.channel_pos` / `weight.channel_neg`: ADC measurement pair
+
+Telemetry health flags:
+
+- `gps_valid`: whether the current GPS fix is valid
+- `weight_valid`: whether the current weight sample is valid
+- `events_reader_ok`: whether the modem events reader is currently healthy
 
 Default load-cell wiring in config:
 
@@ -242,4 +257,4 @@ weight:
   enabled: false
 ```
 
-The service will still run normally. The telemetry packet will keep sending `weight: 0.0`.
+The service will still run normally. The telemetry packet will keep sending `weight: 0.0` and `weight_valid: false`.
