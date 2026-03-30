@@ -285,14 +285,21 @@ Before calibration:
 - The bridge tap is wired correctly
 - The factory weighing terminal is powered and exciting the bridge
 
-Commands:
+Command:
 
 ```bash
 cd /opt/host-monitor
 source .venv/bin/activate
-host-monitor-calibrate --config ./config.yaml tare
-host-monitor-calibrate --config ./config.yaml calibrate --known-kg 100
+host-monitor-calibrate --config ./config.yaml
 ```
+
+Workflow:
+
+- Put the first known load on the machine and wait until the reading stabilizes
+- Enter the current known total weight in kg when the script asks for the first point
+- Add or change the load and wait for stabilization again
+- Press Enter when the script asks to continue, then enter the new known total weight in kg
+- The script computes and saves both `offset` and `scale` from those two measured points
 
 Calibration is stored in:
 

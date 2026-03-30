@@ -285,14 +285,21 @@ rm -f ./data/buffer.sqlite3 ./data/buffer.sqlite3-shm ./data/buffer.sqlite3-wal
 - Врезка в тензолинию подключена правильно
 - Штатный терминал включен и возбуждает мост
 
-Команды:
+Команда:
 
 ```bash
 cd /opt/host-monitor
 source .venv/bin/activate
-host-monitor-calibrate --config ./config.yaml tare
-host-monitor-calibrate --config ./config.yaml calibrate --known-kg 100
+host-monitor-calibrate --config ./config.yaml
 ```
+
+Порядок действий:
+
+- Положи первый известный груз и дождись стабилизации показаний
+- Когда скрипт попросит первую точку, введи текущий известный общий вес в кг
+- Затем добавь или измени груз и снова дождись стабилизации
+- Нажми Enter, когда скрипт попросит продолжить, и введи новый известный общий вес в кг
+- Скрипт сам посчитает и сохранит `offset` и `scale` по двум измеренным точкам
 
 Калибровка сохраняется в:
 
