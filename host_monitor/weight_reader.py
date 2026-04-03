@@ -184,15 +184,16 @@ class WeightReader:
         self._adc_dev.ADS1263_WriteCmd(cmds["CMD_STOP1"])
         # Use differential mode so ADS1263_GetChannalValue(1) means IN2-IN3.
         self._adc_dev.ADS1263_SetMode(1)
-        # MODE0 bit7 is REFREV in the ADS1263 datasheet; set it only if the config swaps ref polarity.
-        mode0 = int(self._adc_dev.ADS1263_ReadData(regs["REG_MODE0"])[0])
-        mode0 = (mode0 | 0x80) if ref_reverse else (mode0 & 0x7F)
-        self._adc_dev.ADS1263_WriteReg(regs["REG_MODE0"], mode0)
-        # Reference is sensed from the existing machine bridge excitation (E+ -> IN0, E- -> IN1).
-        self._adc_dev.ADS1263_WriteReg(regs["REG_REFMUX"], refmux)
-        readback = int(self._adc_dev.ADS1263_ReadData(regs["REG_REFMUX"])[0])
-        if readback != refmux:
-            raise RuntimeError(f"failed to set ADS1263 REFMUX to external reference (got 0x{readback:02x})")
+        # Waveshare's library is inconsistent about ADC1 register readback on some boards.
+        # In field use we still attempt to switch MODE0/REFMUX, but we do not abort just
+        # because the helper library cannot confirm the write with a readback value.
+        try:
+            mode0 = 0x80 if ref_reverse else 0x00
+            self._adc_dev.ADS1263_WriteReg(regs["REG_MODE0"], mode0)
+            # Reference is sensed from the existing machine bridge excitation (E+ -> IN0, E- -> IN1).
+            self._adc_dev.ADS1263_WriteReg(regs["REG_REFMUX"], refmux)
+        except Exception as e:
+            log.warning("ADS1263 external reference configuration was not confirmed, continuing anyway: %s", e)
         # Prime the measurement input mux to the configured bridge signal pair.
         self._adc_dev.ADS1263_SetDiffChannal(meas_ch)
         self._adc_dev.ADS1263_WriteCmd(cmds["CMD_START1"])

@@ -296,7 +296,7 @@ host-monitor-calibrate --config ./config.yaml
 Workflow:
 
 - Put the first known load on the machine and wait until the reading stabilizes
-- Enter the current known total weight in kg when the script asks for the first point
+- Enter the current known total weight in kg when the script asks for the first point. `0` is allowed for an unloaded first point
 - Add or change the load and wait for stabilization again
 - Press Enter when the script asks to continue, then enter the new known total weight in kg
 - The script computes and saves both `offset` and `scale` from those two measured points

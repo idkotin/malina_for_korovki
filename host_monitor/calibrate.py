@@ -18,8 +18,8 @@ def _read_known_weight(prompt: str) -> float:
         value = float(raw)
     except ValueError as e:
         raise ValueError(f"invalid weight value: {raw!r}") from e
-    if value <= 0:
-        raise ValueError("known weight must be > 0")
+    if value < 0:
+        raise ValueError("known weight must be >= 0")
     return value
 
 
