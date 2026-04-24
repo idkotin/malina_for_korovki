@@ -36,16 +36,23 @@ weight:
   simulate: false
   # Path where ADS1263.py from Waveshare repository is located.
   waveshare_path: "/opt/High-Pricision_AD_HAT/python"
-  # Bridge reference differential inputs (E+ - E-) -> IN0-IN1
+  # Recommended passive parallel mode:
+  # SIG+ -> IN0, SIG- -> IN1, terminal E- -> AVSS/GND, AVDD not connected.
+  frontend: "adc2"
+  reference_mode: "internal"
+  # Legacy adc1 reference pair (kept for compatibility with old setups)
   ref_pos: 0
   ref_neg: 1
-  # Bridge measurement differential inputs (SIG+ - SIG-) -> IN2-IN3
-  channel_pos: 2
-  channel_neg: 3
-  sample_count: 10
+  # Passive tap measurement pair
+  channel_pos: 0
+  channel_neg: 1
+  sample_count: 24
   adc_rate: "ADS1263_20SPS"
+  adc2_rate: "ADS1263_ADC2_400SPS"
   # Ratio filtering
   trim_fraction: 0.1
+  smoothing_alpha: 0.12
+  median_window: 7
   min_ref_abs: 0.000000001
 
 wifi:

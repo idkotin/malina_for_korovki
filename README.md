@@ -128,6 +128,8 @@ Important fields:
 - `weight.simulate`: use a fake weight value instead of the ADC
 - `weight.ref_pos` / `weight.ref_neg`: ADC reference sense pair
 - `weight.channel_pos` / `weight.channel_neg`: ADC measurement pair
+- `weight.frontend`: `adc2` for passive parallel sniffing, `adc1` for legacy direct path
+- `weight.reference_mode`: `internal` for passive parallel mode, `avdd` for standalone bridge power mode
 
 Telemetry health flags:
 
@@ -139,10 +141,10 @@ Default load-cell wiring in config:
 
 ```yaml
 weight:
-  ref_pos: 0
-  ref_neg: 1
-  channel_pos: 2
-  channel_neg: 3
+  frontend: "adc2"
+  reference_mode: "internal"
+  channel_pos: 0
+  channel_neg: 1
 ```
 
 ## 4) Existing load-cell system integration
@@ -161,19 +163,18 @@ Hardware assumptions:
 - Available lines are `E+`, `E-`, `SIG+`, `SIG-`, and `shield/drain`
 - The bridge excitation is expected to come from the factory terminal
 
-Electrical connection from the summing box output to the ADS1263 HAT:
+Electrical connection from the summing box output to the ADS1263 HAT in the recommended passive mode:
 
-- `E+` -> `IN0`
-- `E-` -> `IN1`
-- `SIG+` -> `IN2`
-- `SIG-` -> `IN3`
+- `SIG+` -> `IN0`
+- `SIG-` -> `IN1`
+- `E-` -> `AVSS/GND`
+- `E+` -> do not connect to `AVDD` in passive mode
 - `shield/drain` -> keep it as shield continuity; do not use it as a signal conductor
 
 ADC behavior in this project:
 
-- Differential measurement input is `IN2 - IN3`
-- External differential reference is `IN0 - IN1`
-- The ADC treats `E+ / E-` only as reference sense
+- Passive parallel default: `adc2` frontend with internal reference, differential input `IN0 - IN1`
+- The factory terminal keeps exciting the bridge
 - The ADC does not drive `E+ / E-`
 - This is not an HX711-style bridge-powering setup
 

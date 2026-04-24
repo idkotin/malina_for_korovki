@@ -50,18 +50,28 @@ class WeightCfg(BaseModel):
     simulate: bool = True
     # Path to cloned Waveshare python folder (contains ADS1263.py).
     waveshare_path: str = "/opt/High-Pricision_AD_HAT/python"
-    # Bridge reference differential inputs (E+ - E-).
-    # Default wiring: E+ -> IN0, E- -> IN1.
+    # Frontend selection:
+    # - adc2: passive parallel sniffing, recommended with factory terminal
+    # - adc1: legacy direct ADS1263 path with external reference sense
+    frontend: str = "adc2"
+    # Reference source:
+    # - internal: factory terminal powers the bridge, ADS1263 only listens
+    # - avdd: ADS1263 board powers the bridge from AVDD/AVSS
+    reference_mode: str = "internal"
+    # Bridge reference differential inputs (E+ - E-) for adc1 legacy mode.
     ref_pos: int = 0
     ref_neg: int = 1
     # Bridge measurement differential inputs (SIG+ - SIG-).
-    # Default wiring: SIG+ -> IN2, SIG- -> IN3.
-    channel_pos: int = 2
-    channel_neg: int = 3
-    sample_count: int = 10
+    # Passive parallel default wiring: SIG+ -> IN0, SIG- -> IN1, E- -> AVSS/GND.
+    channel_pos: int = 0
+    channel_neg: int = 1
+    sample_count: int = 24
     adc_rate: str = "ADS1263_20SPS"
+    adc2_rate: str = "ADS1263_ADC2_400SPS"
     # Filtering: trim extremes before averaging ratio.
     trim_fraction: float = 0.1
+    smoothing_alpha: float = 0.12
+    median_window: int = 7
     # Avoid division by ~0 when bridge excitation is absent.
     min_ref_abs: float = 1e-9
 
