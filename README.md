@@ -305,7 +305,21 @@ Workflow:
 - Press Enter when the script asks to continue, then enter the new known total weight in kg
 - The script computes and saves both `offset` and `scale` from those two measured points
 
-If `git pull` is blocked by a local `config.yaml`, keep your live config and update like this:
+If `config.yaml` is a machine-local live config, keep it out of the normal update flow:
+
+```bash
+cd /opt/host-monitor
+git update-index --skip-worktree config.yaml
+```
+
+To let Git manage it again later:
+
+```bash
+cd /opt/host-monitor
+git update-index --no-skip-worktree config.yaml
+```
+
+If `git pull` is already blocked by a local `config.yaml`, keep your live config and update like this:
 
 ```bash
 cd /opt/host-monitor
@@ -313,6 +327,16 @@ cp config.yaml config.yaml.bak-$(date +%F-%H%M%S)
 git stash push -m local-config -- config.yaml
 git pull
 git stash pop
+```
+
+If `stash pop` leaves conflict markers like `<<<<<<<`, restore your known-good local config from backup and resolve the index:
+
+```bash
+cd /opt/host-monitor
+cp config.yaml.bak-YYYY-MM-DD-HHMMSS config.yaml
+git add config.yaml
+git restore --staged config.yaml
+git update-index --skip-worktree config.yaml
 ```
 
 Calibration is stored in:
