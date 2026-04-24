@@ -88,6 +88,17 @@ class WeightReader:
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
 
+    def prepare(self) -> None:
+        self._init_ads1263()
+
+    def uses_passive_parallel_mode(self) -> bool:
+        return (
+            self._cfg.driver.lower() == "ads1263"
+            and not self._cfg.simulate
+            and self._cfg.frontend.lower() == "adc2"
+            and self._cfg.reference_mode.lower() == "internal"
+        )
+
     def _init_ads1263(self) -> None:
         if self._adc_ready:
             return

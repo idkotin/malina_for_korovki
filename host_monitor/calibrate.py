@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import statistics
+import time
 
 from host_monitor.config import ensure_dirs, load_config
 from host_monitor.weight_reader import ScaleCalibration, WeightCfg, WeightReader, save_calibration
@@ -50,21 +52,39 @@ def _build_weight_reader(config_path: str) -> tuple[WeightReader, str]:
     return WeightReader(wcfg), cfg.weight.calibration_path
 
 
+def _capture_stable_raw(reader: WeightReader, rounds: int = 5, delay_s: float = 0.2) -> float:
+    values: list[float] = []
+    for idx in range(max(1, rounds)):
+        values.append(float(reader.read_raw()))
+        if idx + 1 < rounds:
+            time.sleep(delay_s)
+    return float(statistics.median(values))
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     wr, calibration_path = _build_weight_reader(args.config)
 
     print("Two-point interactive calibration.")
-    print("Step 1: put the first known load on the scale and wait until it stabilizes.")
+    if wr.uses_passive_parallel_mode():
+        print("Passive parallel mode detected.")
+        print("Reader starts first, then you can power on the factory terminal.")
+        wr.prepare()
+        input(
+            "Turn on the factory terminal, wait until its own display reaches zero and the first load is ready, then press Enter..."
+        )
+    else:
+        print("Step 1: put the first known load on the scale and wait until it stabilizes.")
+
     known_kg_1 = _read_known_weight("Enter the current known total weight in kg: ")
-    raw_1 = wr.read_raw()
+    raw_1 = _capture_stable_raw(wr)
     print(f"Captured point 1: known_kg={known_kg_1} raw={raw_1}")
 
     input("Add or change the load, wait for stabilization, then press Enter...")
     known_kg_2 = _read_known_weight("Enter the new known total weight in kg: ")
     if known_kg_2 == known_kg_1:
         raise ValueError("the two known weights must be different")
-    raw_2 = wr.read_raw()
+    raw_2 = _capture_stable_raw(wr)
     print(f"Captured point 2: known_kg={known_kg_2} raw={raw_2}")
 
     if abs(raw_2 - raw_1) < 1e-9:

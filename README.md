@@ -296,11 +296,24 @@ host-monitor-calibrate --config ./config.yaml
 
 Workflow:
 
+- In passive `adc2 + internal` mode, start the calibration script first
+- Then power on the factory terminal and wait until its own display reaches zero
+- Only after that enter the first known weight and capture point 1
 - Put the first known load on the machine and wait until the reading stabilizes
 - Enter the current known total weight in kg when the script asks for the first point. `0` is allowed for an unloaded first point
 - Add or change the load and wait for stabilization again
 - Press Enter when the script asks to continue, then enter the new known total weight in kg
 - The script computes and saves both `offset` and `scale` from those two measured points
+
+If `git pull` is blocked by a local `config.yaml`, keep your live config and update like this:
+
+```bash
+cd /opt/host-monitor
+cp config.yaml config.yaml.bak-$(date +%F-%H%M%S)
+git stash push -m local-config -- config.yaml
+git pull
+git stash pop
+```
 
 Calibration is stored in:
 
