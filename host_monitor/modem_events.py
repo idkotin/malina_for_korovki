@@ -6,6 +6,7 @@ import queue
 import re
 import threading
 import time
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -276,34 +277,6 @@ def _decode_sms_deliver_pdu(idx: int, pdu_hex: str) -> DecodedSms | None:
     )
 
 
-def _assemble_sms_events(messages: list[DecodedSms]) -> tuple[list[dict], list[int]]:
-    events: list[dict] = []
-    processed_indices: list[int] = []
-    groups: dict[tuple[str, str, int], list[DecodedSms]] = {}
-
-    for msg in messages:
-        if msg.concat_ref and msg.concat_total and msg.concat_total > 1 and msg.concat_seq:
-            key = (msg.sender, msg.concat_ref, msg.concat_total)
-            groups.setdefault(key, []).append(msg)
-            continue
-        events.append({"type": "sms", "timestamp": utc_now_iso(), "from": msg.sender, "text": msg.text})
-        processed_indices.append(msg.idx)
-
-    for (sender, ref, total), parts in groups.items():
-        by_seq = {p.concat_seq: p for p in parts if p.concat_seq is not None}
-        if all(seq in by_seq for seq in range(1, total + 1)):
-            ordered = [by_seq[seq] for seq in range(1, total + 1)]
-            text = "".join(p.text for p in ordered)
-            events.append({"type": "sms", "timestamp": utc_now_iso(), "from": sender, "text": text})
-            processed_indices.extend(p.idx for p in ordered)
-            log.info("SMS multipart assembled: from=%s ref=%s parts=%s text_len=%s", sender, ref, total, len(text))
-        else:
-            have = sorted(seq for seq in by_seq if seq is not None)
-            log.info("SMS multipart incomplete: from=%s ref=%s have=%s total=%s", sender, ref, have, total)
-
-    return events, processed_indices
-
-
 SMS_INDEX_RE = re.compile(r"^\+CMTI:.*?,\s*(\d+)\s*$")
 # Example variants:
 #   +CLIP: "+7999...",4,0,0,"",0
@@ -330,6 +303,8 @@ class ModemEventsReader:
         self._last_err: str | None = None
         self._lte_snapshot: dict = {"rssi_dbm": None, "access_tech": None, "ts": None}
         self._pending_call_ts: float | None = None
+        self._pending_sms_parts: dict[tuple[str, str, int], dict[int, DecodedSms]] = defaultdict(dict)
+        self._pending_sms_seen_ts: dict[tuple[str, str, int], float] = {}
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -360,6 +335,45 @@ class ModemEventsReader:
 
     def lte_snapshot(self) -> dict:
         return dict(self._lte_snapshot)
+
+    def _cleanup_old_pending_sms(self, max_age_s: float = 1800.0) -> None:
+        now = time.time()
+        stale = [key for key, seen_ts in self._pending_sms_seen_ts.items() if now - seen_ts > max_age_s]
+        for key in stale:
+            self._pending_sms_parts.pop(key, None)
+            self._pending_sms_seen_ts.pop(key, None)
+
+    def _assemble_sms_events(self, messages: list[DecodedSms]) -> tuple[list[dict], list[int]]:
+        events: list[dict] = []
+        decoded_indices: list[int] = []
+        self._cleanup_old_pending_sms()
+
+        for msg in messages:
+            decoded_indices.append(msg.idx)
+            if msg.concat_ref and msg.concat_total and msg.concat_total > 1 and msg.concat_seq:
+                key = (msg.sender, msg.concat_ref, msg.concat_total)
+                self._pending_sms_parts[key][int(msg.concat_seq)] = msg
+                self._pending_sms_seen_ts[key] = time.time()
+                continue
+            events.append({"type": "sms", "timestamp": utc_now_iso(), "from": msg.sender, "text": msg.text})
+
+        completed_keys: list[tuple[str, str, int]] = []
+        for (sender, ref, total), by_seq in self._pending_sms_parts.items():
+            if all(seq in by_seq for seq in range(1, total + 1)):
+                ordered = [by_seq[seq] for seq in range(1, total + 1)]
+                text = "".join(p.text for p in ordered)
+                events.append({"type": "sms", "timestamp": utc_now_iso(), "from": sender, "text": text})
+                completed_keys.append((sender, ref, total))
+                log.info("SMS multipart assembled: from=%s ref=%s parts=%s text_len=%s", sender, ref, total, len(text))
+            else:
+                have = sorted(seq for seq in by_seq)
+                log.info("SMS multipart incomplete: from=%s ref=%s have=%s total=%s", sender, ref, have, total)
+
+        for key in completed_keys:
+            self._pending_sms_parts.pop(key, None)
+            self._pending_sms_seen_ts.pop(key, None)
+
+        return events, decoded_indices
 
     def _open_port(self) -> serial.Serial:
         ports = [self._cfg.port] if self._cfg.port else []
@@ -455,14 +469,17 @@ class ModemEventsReader:
                         messages.append(sms)
                     current_idx = None
 
-            events, processed_indices = _assemble_sms_events(messages)
+            events, processed_indices = self._assemble_sms_events(messages)
 
-            if events:
+            if processed_indices:
                 for idx in sorted(set(processed_indices)):
                     try:
                         _at_cmd(ser, f"AT+CMGD={idx}", timeout_s=3.0)
                     except Exception:
                         pass
+                log.info("SMS decoded parts deleted_indices=%s", sorted(set(processed_indices)))
+
+            if events:
                 log.info("SMS polled: count=%s deleted_indices=%s", len(events), sorted(set(processed_indices)))
                 return events
 
@@ -543,7 +560,19 @@ class ModemEventsReader:
 
                         # When SIM memory is full or there is an SMS-related error,
                         # clear all SMS to restore reception.
-                        if "SMS FULL" in line.upper() or line.startswith("+CMS ERROR"):
+                        if "SMS FULL" in line.upper():
+                            try:
+                                log.warning("SMS capacity detected (%s). Polling stored parts before cleanup.", line)
+                                sms_events = self._poll_unread_sms(ser)
+                                for ev in sms_events:
+                                    log.info("SMS polled after FULL: from=%s text_len=%s", ev.get("from"), len(ev.get("text", "")))
+                                    self._q.put(ev)
+                            except Exception as e:
+                                self._last_err = str(e)
+                                log.warning("SMS FULL recovery poll error: %s", e)
+                            continue
+
+                        if line.startswith("+CMS ERROR"):
                             try:
                                 log.warning("SMS capacity/error detected (%s). Clearing SIM SMS memory.", line)
                                 _at_cmd(ser, "AT+CMGD=1,4", timeout_s=3.0)
