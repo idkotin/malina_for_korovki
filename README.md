@@ -51,6 +51,12 @@ SMS/call events use a separate endpoint (`events.url`):
 }
 ```
 
+Long SMS note:
+
+- The modem reader uses SMS PDU mode and assembles multipart SMS before buffering or sending
+- This matters for Russian UCS2 messages, which are often split by the operator into several parts
+- Logs include `SMS multipart assembled` and `SMS event sent: text_len=...` for verification
+
 Call event example:
 
 ```json

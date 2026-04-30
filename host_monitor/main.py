@@ -159,10 +159,20 @@ def main(argv: list[str] | None = None) -> None:
             # Drain modem events -> send/buffer
             for ev in events_reader.drain(max_items=20):
                 ev_payload = {"device_id": cfg.device.id, **ev}
+                if ev_payload.get("type") == "sms":
+                    log.info(
+                        "SMS event ready: from=%s text_len=%s",
+                        ev_payload.get("from"),
+                        len(str(ev_payload.get("text", ""))),
+                    )
                 try:
                     events_sender.send_one(ev_payload)
+                    if ev_payload.get("type") == "sms":
+                        log.info("SMS event sent: text_len=%s", len(str(ev_payload.get("text", ""))))
                 except Exception:
                     events_q.put(ev_payload)
+                    if ev_payload.get("type") == "sms":
+                        log.info("SMS event buffered: text_len=%s", len(str(ev_payload.get("text", ""))))
 
             # Flush buffers with backoff and time budget
             now = time.time()
