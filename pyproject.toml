@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 host-monitor = "host_monitor.main:main"
 host-monitor-calibrate = "host_monitor.calibrate:main"
+host-monitor-events = "host_monitor.events_dump:main"
 
 [tool.setuptools]
 packages = ["host_monitor"]

@@ -256,6 +256,20 @@ cd /opt/host-monitor
 sqlite3 ./data/buffer.sqlite3 "select id, created_utc, substr(payload_json,1,200) from events order by id desc limit 10;"
 ```
 
+That SQLite example intentionally shows only the first 200 characters. To inspect full SMS text without truncation:
+
+```bash
+cd /opt/host-monitor
+source .venv/bin/activate
+host-monitor-events --config ./config.yaml --limit 10
+```
+
+To print complete raw JSON for each buffered event:
+
+```bash
+host-monitor-events --config ./config.yaml --limit 10 --full-json
+```
+
 Clear only buffered telemetry rows:
 
 ```bash
