@@ -62,6 +62,9 @@ def main(argv: list[str] | None = None) -> None:
             adc2_rate=cfg.weight.adc2_rate,
             trim_fraction=cfg.weight.trim_fraction,
             smoothing_alpha=cfg.weight.smoothing_alpha,
+            fast_smoothing_alpha=cfg.weight.fast_smoothing_alpha,
+            fast_change_threshold_kg=cfg.weight.fast_change_threshold_kg,
+            zero_deadband_kg=cfg.weight.zero_deadband_kg,
             median_window=cfg.weight.median_window,
             min_ref_abs=cfg.weight.min_ref_abs,
         )

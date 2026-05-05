@@ -35,6 +35,9 @@ class WeightCfg:
     adc2_rate: str
     trim_fraction: float = 0.1
     smoothing_alpha: float = 0.12
+    fast_smoothing_alpha: float = 0.35
+    fast_change_threshold_kg: float = 40.0
+    zero_deadband_kg: float = 10.0
     median_window: int = 7
     min_ref_abs: float = 1e-9
 
@@ -306,13 +309,24 @@ class WeightReader:
             raw = self.read_raw()
             value = (raw - self._cal.offset) * self._cal.scale
             alpha = max(0.0, min(1.0, float(self._cfg.smoothing_alpha)))
+            fast_alpha = max(alpha, min(1.0, float(self._cfg.fast_smoothing_alpha)))
+            fast_threshold = max(0.0, float(self._cfg.fast_change_threshold_kg))
+            zero_deadband = max(0.0, float(self._cfg.zero_deadband_kg))
             self._recent_weights.append(float(value))
             median_value = statistics.median(self._recent_weights)
             if self._filtered_weight is None:
                 self._filtered_weight = float(median_value)
             else:
-                self._filtered_weight = float(alpha * median_value + (1.0 - alpha) * self._filtered_weight)
-            return Weight(weight=float(self._filtered_weight))
+                delta = abs(float(median_value) - float(self._filtered_weight))
+                selected_alpha = fast_alpha if delta >= fast_threshold else alpha
+                self._filtered_weight = float(
+                    selected_alpha * median_value + (1.0 - selected_alpha) * self._filtered_weight
+                )
+            display_weight = float(self._filtered_weight)
+            if abs(display_weight) <= zero_deadband and abs(float(median_value)) <= zero_deadband:
+                display_weight = 0.0
+                self._filtered_weight = 0.0
+            return Weight(weight=display_weight)
         except Exception as e:
             log.warning("weight read failed: %s", e)
             return Weight(weight=None)

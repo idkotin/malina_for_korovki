@@ -26,9 +26,12 @@ weight:
   channel_neg: 1
   sample_count: 80
   adc2_rate: "ADS1263_ADC2_100SPS"
-  trim_fraction: 0.25
-  smoothing_alpha: 0.04
-  median_window: 15
+  trim_fraction: 0.2
+  smoothing_alpha: 0.08
+  fast_smoothing_alpha: 0.35
+  fast_change_threshold_kg: 40.0
+  zero_deadband_kg: 10.0
+  median_window: 9
 ```
 
 ## Notes

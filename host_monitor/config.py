@@ -69,9 +69,12 @@ class WeightCfg(BaseModel):
     adc_rate: str = "ADS1263_20SPS"
     adc2_rate: str = "ADS1263_ADC2_100SPS"
     # Filtering: trim extremes before averaging ratio.
-    trim_fraction: float = 0.25
-    smoothing_alpha: float = 0.04
-    median_window: int = 15
+    trim_fraction: float = 0.2
+    smoothing_alpha: float = 0.08
+    fast_smoothing_alpha: float = 0.35
+    fast_change_threshold_kg: float = 40.0
+    zero_deadband_kg: float = 10.0
+    median_window: int = 9
     # Avoid division by ~0 when bridge excitation is absent.
     min_ref_abs: float = 1e-9
 
