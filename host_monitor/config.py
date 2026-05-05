@@ -65,13 +65,13 @@ class WeightCfg(BaseModel):
     # Passive parallel default wiring: SIG+ -> IN0, SIG- -> IN1, E- -> AVSS/GND.
     channel_pos: int = 0
     channel_neg: int = 1
-    sample_count: int = 24
+    sample_count: int = 80
     adc_rate: str = "ADS1263_20SPS"
-    adc2_rate: str = "ADS1263_ADC2_400SPS"
+    adc2_rate: str = "ADS1263_ADC2_100SPS"
     # Filtering: trim extremes before averaging ratio.
-    trim_fraction: float = 0.1
-    smoothing_alpha: float = 0.12
-    median_window: int = 7
+    trim_fraction: float = 0.25
+    smoothing_alpha: float = 0.04
+    median_window: int = 15
     # Avoid division by ~0 when bridge excitation is absent.
     min_ref_abs: float = 1e-9
 

@@ -24,10 +24,11 @@ weight:
   reference_mode: "internal"
   channel_pos: 0
   channel_neg: 1
-  sample_count: 24
-  adc2_rate: "ADS1263_ADC2_400SPS"
-  smoothing_alpha: 0.12
-  median_window: 7
+  sample_count: 80
+  adc2_rate: "ADS1263_ADC2_100SPS"
+  trim_fraction: 0.25
+  smoothing_alpha: 0.04
+  median_window: 15
 ```
 
 ## Notes

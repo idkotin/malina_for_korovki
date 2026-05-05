@@ -52,13 +52,14 @@ def _build_weight_reader(config_path: str) -> tuple[WeightReader, str]:
     return WeightReader(wcfg), cfg.weight.calibration_path
 
 
-def _capture_stable_raw(reader: WeightReader, rounds: int = 5, delay_s: float = 0.2) -> float:
+def _capture_stable_raw(reader: WeightReader, rounds: int = 9, delay_s: float = 0.2) -> tuple[float, float]:
     values: list[float] = []
     for idx in range(max(1, rounds)):
         values.append(float(reader.read_raw()))
         if idx + 1 < rounds:
             time.sleep(delay_s)
-    return float(statistics.median(values))
+    noise = statistics.pstdev(values) if len(values) > 1 else 0.0
+    return float(statistics.median(values)), float(noise)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -77,18 +78,28 @@ def main(argv: list[str] | None = None) -> None:
         print("Step 1: put the first known load on the scale and wait until it stabilizes.")
 
     known_kg_1 = _read_known_weight("Enter the current known total weight in kg: ")
-    raw_1 = _capture_stable_raw(wr)
-    print(f"Captured point 1: known_kg={known_kg_1} raw={raw_1}")
+    raw_1, noise_1 = _capture_stable_raw(wr)
+    print(f"Captured point 1: known_kg={known_kg_1} raw={raw_1} noise={noise_1}")
 
     input("Add or change the load, wait for stabilization, then press Enter...")
     known_kg_2 = _read_known_weight("Enter the new known total weight in kg: ")
     if known_kg_2 == known_kg_1:
         raise ValueError("the two known weights must be different")
-    raw_2 = _capture_stable_raw(wr)
-    print(f"Captured point 2: known_kg={known_kg_2} raw={raw_2}")
+    raw_2, noise_2 = _capture_stable_raw(wr)
+    print(f"Captured point 2: known_kg={known_kg_2} raw={raw_2} noise={noise_2}")
 
     if abs(raw_2 - raw_1) < 1e-9:
         raise RuntimeError("raw calibration points are too close; check loads and wiring")
+
+    span = abs(raw_2 - raw_1)
+    noise = max(noise_1, noise_2, 1e-9)
+    snr = span / noise
+    print(f"Calibration raw span={span} max_noise={noise} span/noise={snr:.1f}")
+    if snr < 10.0:
+        print(
+            "WARNING: calibration span is close to noise. Use a larger known load if possible; "
+            "otherwise readings can jump a lot."
+        )
 
     scale = float((known_kg_2 - known_kg_1) / (raw_2 - raw_1))
     offset = float(raw_1 - (known_kg_1 / scale))
