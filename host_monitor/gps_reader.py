@@ -43,6 +43,13 @@ def _parse_lat_lon(lat_str: str, lat_hemi: str, lon_str: str, lon_hemi: str) -> 
         return None
 
 
+def _parse_float(value: str) -> float | None:
+    try:
+        return float(value) if value else None
+    except Exception:
+        return None
+
+
 def _parse_nmea_line(line: str) -> Position | None:
     # We keep it minimal: accept GGA or RMC.
     if not line.startswith("$"):
@@ -71,14 +78,16 @@ def _parse_nmea_line(line: str) -> Position | None:
         return Position(lat=lat, lon=lon, quality=quality, satellites=satellites)
 
     if kind.endswith("RMC") and len(parts) >= 7:
-        # $..RMC,time,status,lat,N,lon,E,...
+        # $..RMC,time,status,lat,N,lon,E,speed_knots,...
         status = parts[2].upper() if parts[2] else ""
-        latlon = _parse_lat_lon(parts[3], parts[4], parts[5], parts[6])
-        if latlon is None:
-            return Position()
-        lat, lon = latlon
         ok = status == "A"
-        return Position(lat=lat, lon=lon, quality=1 if ok else 0)
+        latlon = _parse_lat_lon(parts[3], parts[4], parts[5], parts[6])
+        speed_knots = _parse_float(parts[7]) if len(parts) >= 8 else None
+        speed_kmh = speed_knots * 1.852 if speed_knots is not None and ok else None
+        if latlon is None:
+            return Position(speed_kmh=speed_kmh)
+        lat, lon = latlon
+        return Position(lat=lat, lon=lon, quality=1 if ok else 0, speed_kmh=speed_kmh)
 
     if kind.endswith("GNS") and len(parts) >= 8:
         # $..GNS,time,lat,N,lon,E,mode,num_sats,...
@@ -104,6 +113,7 @@ def _merge_position(base: Position, update: Position) -> Position:
         lon=update.lon if update.lon is not None else base.lon,
         quality=update.quality if update.quality is not None else base.quality,
         satellites=update.satellites if update.satellites is not None else base.satellites,
+        speed_kmh=update.speed_kmh if update.speed_kmh is not None else base.speed_kmh,
     )
 
 

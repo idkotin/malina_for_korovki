@@ -26,6 +26,7 @@ def build_telemetry(
     lon = position.lon if position.lon is not None else 0.0
     gps_quality = position.quality if position.quality is not None else 0
     gps_satellites = position.satellites if position.satellites is not None else 0
+    speed_kmh = position.speed_kmh if gps_valid and position.speed_kmh is not None else 0.0
     weight_kg = weight.weight if weight.weight is not None else 0.0
 
     lte_rssi = lte.rssi_dbm if lte.rssi_dbm is not None else 0
@@ -38,6 +39,7 @@ def build_telemetry(
         lon=lon,
         gps_valid=gps_valid,
         gps_satellites=gps_satellites,
+        speed_kmh=speed_kmh,
         weight=weight_kg,
         weight_valid=weight_valid,
         gps_quality=gps_quality,

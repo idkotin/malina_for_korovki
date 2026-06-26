@@ -18,7 +18,7 @@ def _sanitize_telemetry_payload(payload: dict) -> dict:
     numeric_zero_float = 0.0
     numeric_zero_int = 0
 
-    for k in ("lat", "lon", "weight", "cpu_temp_c"):
+    for k in ("lat", "lon", "speed_kmh", "weight", "cpu_temp_c"):
         if payload.get(k) is None:
             payload[k] = numeric_zero_float
 
