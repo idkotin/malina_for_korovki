@@ -22,6 +22,7 @@ Current telemetry payload:
   "lon": 82.812417,
   "gps_valid": true,
   "gps_satellites": 12,
+  "speed_kmh": 18.52,
   "weight": 1234.56,
   "weight_valid": true,
   "gps_quality": 1,
@@ -36,6 +37,7 @@ Current telemetry payload:
 Field meaning for health flags:
 
 - `gps_valid`: `true` when current GPS coordinates come from a valid fix
+- `speed_kmh`: GPS speed over ground in km/h, parsed from NMEA RMC; `0.0` when there is no valid fix
 - `weight_valid`: `true` when the current weight value was read successfully
 - `events_reader_ok`: `true` when the modem events reader is healthy, or when modem events are disabled in config
 
@@ -73,7 +75,7 @@ Call event example:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-pip python3-venv git hostapd modemmanager
+sudo apt install -y python3 python3-pip python3-venv git hostapd modemmanager sqlite3
 ```
 
 Enable SPI for ADS1263:
@@ -233,7 +235,122 @@ File logs:
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
-## 8) Buffer inspection and cleanup
+## 8) Remote access
+
+Remote access files live in [`remote_access/amnezia`](./remote_access/amnezia). Do not commit real server IPs, passwords, private keys, exported Amnezia configs, or local `known_hosts` files. The repo `.gitignore` already excludes the common secret files in that folder.
+
+### Method A: direct AmneziaWG access
+
+In AmneziaVPN on the admin laptop:
+
+- Add or open the self-hosted server.
+- Use the `AmneziaWG` protocol and set the server UDP port to the chosen value, for example `1234`.
+- Create a separate access profile for the laptop, for example `admin-laptop`, in the format for the AmneziaVPN app.
+- Create a separate access profile for Raspberry Pi, for example `raspberry-pi`, in `AmneziaWG native config` format.
+- Save the Raspberry Pi export as `amnezia_for_awg.conf` and copy it to `/opt/host-monitor/remote_access/amnezia/amnezia_for_awg.conf` on the Pi.
+
+Install the AmneziaWG client service on Raspberry Pi:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./remote_access/amnezia/install_amnezia_client.sh \
+  --config ./remote_access/amnezia/amnezia_for_awg.conf \
+  --interface awg0 \
+  --service-allowed-ips <VPN_CIDR> \
+  --install-packages
+```
+
+`<VPN_CIDR>` must be the internal Amnezia network that should be reachable through VPN, for example `10.8.1.0/24`. Do not use `0.0.0.0/0` unless you intentionally want the Pi default route to go through VPN.
+
+Check the VPN service:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./remote_access/amnezia/check_remote_access.sh --interface awg0
+sudo systemctl status amneziawg-client@awg0 --no-pager
+sudo awg show awg0
+ip addr show awg0
+```
+
+Connect from the laptop when both devices are connected to AmneziaWG:
+
+```powershell
+ping <RPI_VPN_IP>
+ssh pi@<RPI_VPN_IP>
+```
+
+If VNC is enabled on Raspberry Pi, connect the VNC client to:
+
+```text
+<RPI_VPN_IP>:5900
+```
+
+### Method B: reverse SSH fallback
+
+Use this only if the laptop and Raspberry Pi are both connected to AmneziaWG, but direct client-to-client access does not work.
+
+Create a tunnel key on Raspberry Pi:
+
+```bash
+mkdir -p ~/.ssh
+ssh-keygen -t ed25519 -f ~/.ssh/korovki_pi_tunnel -N ""
+ssh-keyscan -p 22 <SERVER_IP> > ~/.ssh/korovki_server_known_hosts
+scp ~/.ssh/korovki_pi_tunnel.pub root@<SERVER_IP>:/tmp/id_ed25519_pi_tunnel.pub
+```
+
+Prepare a restricted tunnel user on the server:
+
+```bash
+git clone https://github.com/idkotin/malina_for_korovki.git /opt/host-monitor-remote-tools
+cd /opt/host-monitor-remote-tools
+sudo bash ./remote_access/amnezia/prepare_reverse_ssh_server.sh \
+  --public-key-file /tmp/id_ed25519_pi_tunnel.pub \
+  --user pi-tunnel \
+  --remote-ssh-port 2222 \
+  --remote-vnc-port 5901
+```
+
+Enable the reverse tunnel service on Raspberry Pi:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./remote_access/amnezia/install_reverse_ssh.sh \
+  --server-host <SERVER_IP> \
+  --server-user pi-tunnel \
+  --identity-file ~/.ssh/korovki_pi_tunnel \
+  --known-hosts ~/.ssh/korovki_server_known_hosts \
+  --remote-ssh-port 2222 \
+  --enable-vnc \
+  --remote-vnc-port 5901 \
+  --install-packages
+```
+
+Check fallback service autostart:
+
+```bash
+sudo systemctl status reverse-ssh.service --no-pager
+sudo journalctl -u reverse-ssh.service -n 100 --no-pager
+```
+
+Connect through the server:
+
+```powershell
+ssh -J root@<SERVER_IP> -p 2222 pi@127.0.0.1
+```
+
+For VNC through fallback, open a local tunnel from the laptop:
+
+```powershell
+ssh -L 5901:127.0.0.1:5901 root@<SERVER_IP>
+```
+
+Then connect the VNC client to:
+
+```text
+127.0.0.1:5901
+```
+
+## 9) Buffer inspection and cleanup
 
 Install `sqlite3` if it is missing:
 
@@ -297,7 +414,7 @@ cd /opt/host-monitor
 rm -f ./data/buffer.sqlite3 ./data/buffer.sqlite3-shm ./data/buffer.sqlite3-wal
 ```
 
-## 9) Calibration workflow
+## 10) Calibration workflow
 
 Before calibration:
 
@@ -363,7 +480,7 @@ Calibration is stored in:
 
 - `weight.calibration_path` (default `./data/scale_calibration.json`)
 
-## 10) If the load-cell tap is not connected yet
+## 11) If the load-cell tap is not connected yet
 
 Set in config:
 

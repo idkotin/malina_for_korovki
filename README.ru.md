@@ -22,6 +22,7 @@ English version: [README.md](./README.md)
   "lon": 82.812417,
   "gps_valid": true,
   "gps_satellites": 12,
+  "speed_kmh": 18.52,
   "weight": 1234.56,
   "weight_valid": true,
   "gps_quality": 1,
@@ -36,6 +37,7 @@ English version: [README.md](./README.md)
 Что означают флаги состояния:
 
 - `gps_valid`: `true`, когда текущие координаты получены из валидного GPS fix
+- `speed_kmh`: скорость по GPS в км/ч, берется из NMEA RMC; `0.0`, если валидного GPS fix нет
 - `weight_valid`: `true`, когда текущее значение веса считано без ошибки
 - `events_reader_ok`: `true`, когда reader событий модема работает нормально, либо когда события модема отключены в конфиге
 
@@ -67,7 +69,7 @@ SMS и звонки уходят на отдельный endpoint `events.url`:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-pip python3-venv git hostapd modemmanager
+sudo apt install -y python3 python3-pip python3-venv git hostapd modemmanager sqlite3
 ```
 
 Включить SPI для ADS1263:
@@ -226,7 +228,122 @@ journalctl -u host-monitor -f
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
-## 8) Просмотр и очистка буфера
+## 8) Удаленный доступ
+
+Файлы для удаленного доступа лежат в [`remote_access/amnezia`](./remote_access/amnezia). Не коммить реальные IP, пароли, приватные ключи, экспортированные `.conf` из Amnezia и локальные `known_hosts`. В `.gitignore` уже добавлены правила для типовых секретов в этой папке.
+
+### Способ A: прямой доступ через AmneziaWG
+
+В AmneziaVPN на ноутбуке:
+
+- Добавь или открой self-hosted сервер.
+- Выбери протокол `AmneziaWG` и поставь UDP-порт сервера, например `1234`.
+- Создай отдельный доступ для ноутбука, например `admin-laptop`, в формате для приложения AmneziaVPN.
+- Создай отдельный доступ для Raspberry Pi, например `raspberry-pi`, в формате `AmneziaWG native config`.
+- Сохрани экспорт для Raspberry Pi как `amnezia_for_awg.conf` и скопируй его на малину в `/opt/host-monitor/remote_access/amnezia/amnezia_for_awg.conf`.
+
+Установка AmneziaWG-клиента на Raspberry Pi:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./remote_access/amnezia/install_amnezia_client.sh \
+  --config ./remote_access/amnezia/amnezia_for_awg.conf \
+  --interface awg0 \
+  --service-allowed-ips <VPN_CIDR> \
+  --install-packages
+```
+
+`<VPN_CIDR>` — внутренняя сеть Amnezia, которую малина должна видеть через VPN, например `10.8.1.0/24`. Не используй `0.0.0.0/0`, если специально не хочешь пустить весь интернет малины через VPN.
+
+Проверка VPN-сервиса:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./remote_access/amnezia/check_remote_access.sh --interface awg0
+sudo systemctl status amneziawg-client@awg0 --no-pager
+sudo awg show awg0
+ip addr show awg0
+```
+
+Подключение с ноутбука, когда ноутбук и малина подключены к AmneziaWG:
+
+```powershell
+ping <RPI_VPN_IP>
+ssh pi@<RPI_VPN_IP>
+```
+
+Если на Raspberry Pi включен VNC, подключай VNC-клиент к:
+
+```text
+<RPI_VPN_IP>:5900
+```
+
+### Способ B: reverse SSH fallback
+
+Этот способ нужен, если ноутбук и Raspberry Pi оба подключены к AmneziaWG, но прямой client-to-client доступ не работает.
+
+Создать ключ туннеля на Raspberry Pi:
+
+```bash
+mkdir -p ~/.ssh
+ssh-keygen -t ed25519 -f ~/.ssh/korovki_pi_tunnel -N ""
+ssh-keyscan -p 22 <SERVER_IP> > ~/.ssh/korovki_server_known_hosts
+scp ~/.ssh/korovki_pi_tunnel.pub root@<SERVER_IP>:/tmp/id_ed25519_pi_tunnel.pub
+```
+
+Подготовить ограниченного пользователя для туннеля на сервере:
+
+```bash
+git clone https://github.com/idkotin/malina_for_korovki.git /opt/host-monitor-remote-tools
+cd /opt/host-monitor-remote-tools
+sudo bash ./remote_access/amnezia/prepare_reverse_ssh_server.sh \
+  --public-key-file /tmp/id_ed25519_pi_tunnel.pub \
+  --user pi-tunnel \
+  --remote-ssh-port 2222 \
+  --remote-vnc-port 5901
+```
+
+Включить reverse tunnel service на Raspberry Pi:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./remote_access/amnezia/install_reverse_ssh.sh \
+  --server-host <SERVER_IP> \
+  --server-user pi-tunnel \
+  --identity-file ~/.ssh/korovki_pi_tunnel \
+  --known-hosts ~/.ssh/korovki_server_known_hosts \
+  --remote-ssh-port 2222 \
+  --enable-vnc \
+  --remote-vnc-port 5901 \
+  --install-packages
+```
+
+Проверка автозапуска fallback:
+
+```bash
+sudo systemctl status reverse-ssh.service --no-pager
+sudo journalctl -u reverse-ssh.service -n 100 --no-pager
+```
+
+Подключение через сервер:
+
+```powershell
+ssh -J root@<SERVER_IP> -p 2222 pi@127.0.0.1
+```
+
+Для VNC через fallback открой локальный туннель с ноутбука:
+
+```powershell
+ssh -L 5901:127.0.0.1:5901 root@<SERVER_IP>
+```
+
+Потом подключай VNC-клиент к:
+
+```text
+127.0.0.1:5901
+```
+
+## 9) Просмотр и очистка буфера
 
 Если `sqlite3` еще не установлен:
 
@@ -276,7 +393,7 @@ cd /opt/host-monitor
 rm -f ./data/buffer.sqlite3 ./data/buffer.sqlite3-shm ./data/buffer.sqlite3-wal
 ```
 
-## 9) Калибровка
+## 10) Калибровка
 
 Перед калибровкой:
 
@@ -305,7 +422,7 @@ host-monitor-calibrate --config ./config.yaml
 
 - `weight.calibration_path` (по умолчанию `./data/scale_calibration.json`)
 
-## 10) Если тензолиния еще не подключена
+## 11) Если тензолиния еще не подключена
 
 Укажи в конфиге:
 
