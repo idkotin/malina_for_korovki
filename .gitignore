@@ -13,3 +13,11 @@ data/
 .DS_Store
 Thumbs.db
 
+# Remote access secrets and exported VPN configs.
+remote_access/amnezia/*.conf
+remote_access/amnezia/*.key
+remote_access/amnezia/*.pub
+remote_access/amnezia/id_*
+remote_access/amnezia/known_hosts
+remote_access/amnezia/secrets/
+

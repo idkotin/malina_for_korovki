@@ -1,0 +1,14 @@
+[Unit]
+Description=Reverse SSH fallback tunnel for Korovki Raspberry Pi
+After=network-online.target nss-lookup.target
+Wants=network-online.target nss-lookup.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/korovki/remote_access/reverse-ssh.env
+ExecStart=/usr/local/lib/korovki-remote-access/run_reverse_ssh.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
