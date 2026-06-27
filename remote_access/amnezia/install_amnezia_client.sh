@@ -209,9 +209,20 @@ install_packages_with_apt() {
 
   log "Installing AmneziaWG package with apt"
   apt-get update
-  apt-get install -y software-properties-common python3-launchpadlib gnupg2 "${header_pkg}"
+  if ! apt-get install -y gnupg2 ca-certificates dkms; then
+    apt-get install -y gnupg ca-certificates dkms
+  fi
+
+  if apt-cache show "${header_pkg}" >/dev/null 2>&1; then
+    apt-get install -y "${header_pkg}"
+  elif apt-cache show raspberrypi-kernel-headers >/dev/null 2>&1; then
+    apt-get install -y raspberrypi-kernel-headers
+  else
+    warn "Kernel headers were not found automatically. AmneziaWG package install may ask for kernel sources."
+  fi
 
   if [[ "${os_id}" == "ubuntu" || "${os_like}" == *ubuntu* ]]; then
+    apt-get install -y software-properties-common python3-launchpadlib
     if ! grep -Rq 'ppa.launchpadcontent.net/amnezia/ppa' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
       add-apt-repository -y ppa:amnezia/ppa
     fi
@@ -219,9 +230,10 @@ install_packages_with_apt() {
     warn "Using the Debian/Raspberry Pi OS package path from the current upstream AmneziaWG README."
     if ! grep -Rq 'ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
       apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 57290828
+      install -d -m 755 /etc/apt/sources.list.d
       printf '%s\n' \
         'deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' \
-        'deb-src https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' >> /etc/apt/sources.list
+        'deb-src https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' > /etc/apt/sources.list.d/amneziawg-ppa.list
     fi
   else
     die "Automatic package install is only prepared for Debian/Ubuntu-like systems."
