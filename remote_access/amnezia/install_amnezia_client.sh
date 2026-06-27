@@ -176,6 +176,9 @@ prepare_config_file() {
     section == "Interface" && keep_dns != 1 && /^[[:space:]]*DNS[[:space:]]*=/ {
       next
     }
+    section == "Interface" && /^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=[[:space:]]*$/ {
+      next
+    }
     section == "Peer" && /^[[:space:]]*AllowedIPs[[:space:]]*=/ {
       print "AllowedIPs = " service_ips
       peer_allowed_written = 1
