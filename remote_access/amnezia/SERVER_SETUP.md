@@ -59,6 +59,18 @@ GatewayPorts: no
 
 Не открывай `2222` и `5901` наружу через firewall.
 
+Подготовить или обновить инструменты на сервере:
+
+```bash
+if [ -d /opt/host-monitor-remote-tools/.git ]; then
+  cd /opt/host-monitor-remote-tools
+  git pull
+else
+  git clone https://github.com/idkotin/malina_for_korovki.git /opt/host-monitor-remote-tools
+  cd /opt/host-monitor-remote-tools
+fi
+```
+
 Подготовить сервер можно скриптом:
 
 ```bash
@@ -68,6 +80,15 @@ sudo bash ./remote_access/amnezia/prepare_reverse_ssh_server.sh \
   --remote-ssh-port 2222 \
   --remote-vnc-port 5901
 ```
+
+Что делает скрипт на сервере:
+
+- создаёт или обновляет пользователя `pi-tunnel`;
+- ставит shell `/usr/sbin/nologin`;
+- блокирует парольный вход для этого пользователя;
+- добавляет публичный ключ Raspberry Pi в `authorized_keys`;
+- ограничивает ключ опциями `restrict`, `port-forwarding` и `permitlisten`;
+- оставляет reverse-порты локальными при `GatewayPorts no`.
 
 Проверить, что сервер принимает reverse forwarding:
 
@@ -81,4 +102,22 @@ ssh -i /path/to/id_ed25519_pi_tunnel \
   -R 127.0.0.1:2222:127.0.0.1:22 \
   -p <SSH_PORT> \
   pi-tunnel@<SERVER_IP>
+```
+
+После запуска `reverse-ssh.service` на Raspberry Pi проверь сервер:
+
+```bash
+ss -ltn | grep -E '127.0.0.1:(2222|5901)'
+```
+
+Подключение к Raspberry Pi через fallback выполняется с сервера:
+
+```bash
+ssh -p 2222 <RPI_USER>@127.0.0.1
+```
+
+Или с ноутбука одной командой через jump-host:
+
+```powershell
+ssh -J root@<SERVER_IP> -p 2222 <RPI_USER>@127.0.0.1
 ```

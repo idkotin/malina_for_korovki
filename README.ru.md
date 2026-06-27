@@ -232,6 +232,14 @@ tail -f /opt/host-monitor/logs/host_monitor.log
 
 Файлы для удаленного доступа лежат в [`remote_access/amnezia`](./remote_access/amnezia). Не коммить реальные IP, пароли, приватные ключи, экспортированные `.conf` из Amnezia и локальные `known_hosts`. В `.gitignore` уже добавлены правила для типовых секретов в этой папке.
 
+Проверенное целевое состояние:
+
+- `host-monitor.service` включен и стартует после перезагрузки Raspberry Pi.
+- `amneziawg-client@awg0.service` включен и стартует после перезагрузки Raspberry Pi.
+- Установленный AmneziaWG-конфиг работает в service-only режиме: `AllowedIPs` переписывается в `<VPN_CIDR>`, а не остается `0.0.0.0/0`.
+- Пустые опциональные поля из экспортированного AmneziaWG-конфига, например `I2 =`, пропускаются при установке.
+- `reverse-ssh.service` — необязательный запасной доступ; на сервере он слушает только `127.0.0.1`.
+
 ### Способ A: прямой доступ через AmneziaWG
 
 В AmneziaVPN на ноутбуке:
@@ -269,7 +277,7 @@ ip addr show awg0
 
 ```powershell
 ping <RPI_VPN_IP>
-ssh pi@<RPI_VPN_IP>
+ssh <RPI_USER>@<RPI_VPN_IP>
 ```
 
 Если на Raspberry Pi включен VNC, подключай VNC-клиент к:
@@ -294,8 +302,13 @@ scp ~/.ssh/korovki_pi_tunnel.pub root@<SERVER_IP>:/tmp/id_ed25519_pi_tunnel.pub
 Подготовить ограниченного пользователя для туннеля на сервере:
 
 ```bash
-git clone https://github.com/idkotin/malina_for_korovki.git /opt/host-monitor-remote-tools
-cd /opt/host-monitor-remote-tools
+if [ -d /opt/host-monitor-remote-tools/.git ]; then
+  cd /opt/host-monitor-remote-tools
+  git pull
+else
+  git clone https://github.com/idkotin/malina_for_korovki.git /opt/host-monitor-remote-tools
+  cd /opt/host-monitor-remote-tools
+fi
 sudo bash ./remote_access/amnezia/prepare_reverse_ssh_server.sh \
   --public-key-file /tmp/id_ed25519_pi_tunnel.pub \
   --user pi-tunnel \
@@ -328,7 +341,14 @@ sudo journalctl -u reverse-ssh.service -n 100 --no-pager
 Подключение через сервер:
 
 ```powershell
-ssh -J root@<SERVER_IP> -p 2222 pi@127.0.0.1
+ssh -J root@<SERVER_IP> -p 2222 <RPI_USER>@127.0.0.1
+```
+
+Или сначала зайти на сервер, а потом подключиться к локальному reverse-порту:
+
+```bash
+ssh root@<SERVER_IP>
+ssh -p 2222 <RPI_USER>@127.0.0.1
 ```
 
 Для VNC через fallback открой локальный туннель с ноутбука:

@@ -13,6 +13,7 @@ SSH_USER=root
 AMNEZIAWG_PORT=1234
 RPI_INTERFACE=awg0
 RPI_VPN_CIDR=<VPN_CIDR>
+RPI_USER=<RPI_USER>
 ```
 
 `RPI_VPN_CIDR` — VPN-сеть, которую Raspberry Pi должна видеть через AmneziaWG. Для service-only доступа это должна быть внутренняя VPN-сеть Amnezia, а не `0.0.0.0/0`.
@@ -68,7 +69,7 @@ Format: For AmneziaVPN app
 
 ```powershell
 ping RPI_VPN_IP
-ssh pi@RPI_VPN_IP
+ssh RPI_USER@RPI_VPN_IP
 ```
 
 ## 5. Native config для Raspberry Pi
@@ -121,6 +122,8 @@ sudo bash ./remote_access/amnezia/install_amnezia_client.sh \
 
 Скрипт не меняет исходный `.conf`; он ставит в `/etc/amnezia/amneziawg/awg0.conf` уже подготовленную копию.
 
+Если exported config содержит пустые поля вида `I2 =`, `I3 =`, `I4 =`, `I5 =`, установщик пропустит их в установленной копии. Это нужно, потому что `awg setconf` не принимает пустые AmneziaWG-поля.
+
 ## 7. Установка на Raspberry Pi
 
 Если AmneziaWG уже установлен:
@@ -169,7 +172,7 @@ sudo bash ./remote_access/amnezia/check_remote_access.sh --interface awg0
 
 ```powershell
 ping RPI_VPN_IP
-ssh pi@RPI_VPN_IP
+ssh RPI_USER@RPI_VPN_IP
 ```
 
 Если VNC включён:
@@ -198,6 +201,28 @@ server 127.0.0.1:5901 -> Raspberry Pi 127.0.0.1:5900
 pi-tunnel
 ```
 
+На сервере подготовь или обнови каталог с инструментами:
+
+```bash
+if [ -d /opt/host-monitor-remote-tools/.git ]; then
+  cd /opt/host-monitor-remote-tools
+  git pull
+else
+  git clone https://github.com/idkotin/malina_for_korovki.git /opt/host-monitor-remote-tools
+  cd /opt/host-monitor-remote-tools
+fi
+```
+
+Потом подготовь пользователя `pi-tunnel`:
+
+```bash
+sudo bash ./remote_access/amnezia/prepare_reverse_ssh_server.sh \
+  --public-key-file /tmp/id_ed25519_pi_tunnel.pub \
+  --user pi-tunnel \
+  --remote-ssh-port 2222 \
+  --remote-vnc-port 5901
+```
+
 На Raspberry Pi после подготовки SSH key и `known_hosts`:
 
 ```bash
@@ -215,7 +240,7 @@ sudo bash ./remote_access/amnezia/install_reverse_ssh.sh \
 Подключение через fallback с сервера:
 
 ```bash
-ssh -p 2222 pi@127.0.0.1
+ssh -p 2222 RPI_USER@127.0.0.1
 ```
 
 VNC через fallback:
@@ -224,7 +249,47 @@ VNC через fallback:
 127.0.0.1:5901
 ```
 
-## 11. Откат на Raspberry Pi
+## 11. Финальная проверка
+
+После настройки и reboot Raspberry Pi нормальное состояние такое:
+
+```bash
+systemctl is-active host-monitor
+systemctl is-active amneziawg-client@awg0
+systemctl is-active reverse-ssh.service
+ip addr show awg0
+sudo awg show awg0
+```
+
+Ожидаемо:
+
+- `host-monitor` — `active`.
+- `amneziawg-client@awg0` — `active`.
+- `reverse-ssh.service` — `active`, если fallback включён.
+- `awg0` имеет VPN-адрес Raspberry Pi.
+- В `sudo awg show awg0` есть свежий `latest handshake`.
+
+Проверка прямого доступа с ноутбука:
+
+```powershell
+ping RPI_VPN_IP
+ssh RPI_USER@RPI_VPN_IP
+```
+
+Проверка fallback:
+
+```bash
+ssh root@<SERVER_IP>
+ssh -p 2222 RPI_USER@127.0.0.1
+```
+
+Проверка, что reverse-порты на сервере только локальные:
+
+```bash
+ss -ltn | grep -E '127.0.0.1:(2222|5901)'
+```
+
+## 12. Откат на Raspberry Pi
 
 Отключить AmneziaWG unit:
 
@@ -244,4 +309,3 @@ sudo bash ./remote_access/amnezia/uninstall_remote_access.sh \
 ```
 
 Основной `host-monitor.service` этот откат не трогает.
-

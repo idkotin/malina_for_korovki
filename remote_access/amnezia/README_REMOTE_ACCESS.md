@@ -15,6 +15,19 @@
 - `SERVER_AUDIT_TEMPLATE.md` — шаблон аудита сервера перед установкой Amnezia.
 - `RUNBOOK_RASPBERRY_PI.md` — пошаговая инструкция для AmneziaVPN на ноутбуке и запуска на Raspberry Pi.
 
+## Проверенная рабочая схема
+
+- Основной доступ: ноутбук подключается к AmneziaWG и заходит на Raspberry Pi по VPN-адресу.
+- На Raspberry Pi включены и переживают reboot:
+  - `host-monitor.service`;
+  - `amneziawg-client@awg0.service`.
+- Установленный конфиг Raspberry Pi не full-tunnel: `AllowedIPs` заменяется на внутреннюю VPN-сеть через `--service-allowed-ips`.
+- Пустые поля из native export, например `I2 =`, `I3 =`, `I4 =`, `I5 =`, вычищаются из установленной копии конфига.
+- Резервный доступ: `reverse-ssh.service` держит исходящий туннель Raspberry Pi -> server.
+- На сервере reverse SSH публикует только localhost-порты:
+  - `127.0.0.1:2222 -> Raspberry Pi SSH`;
+  - `127.0.0.1:5901 -> Raspberry Pi VNC`, если VNC включён.
+
 ## Что мы принципиально не делаем автоматически
 
 - Не меняем `host-monitor.service`.
@@ -65,6 +78,7 @@ sudo bash ./remote_access/amnezia/install_amnezia_client.sh \
 
 - проверяет наличие `awg` / `awg-quick`;
 - по запросу может попробовать поставить пакет `amneziawg` через `apt`;
+- на Debian/Raspberry Pi OS добавляет AmneziaWG PPA через keyring `signed-by`, без устаревшего `apt-key`;
 - делает backup старого конфига и unit-файла;
 - копирует конфиг в `/etc/amnezia/amneziawg/<interface>.conf`;
 - ставит `amneziawg-client@.service`;
@@ -79,6 +93,14 @@ sudo bash ./remote_access/amnezia/install_amnezia_client.sh \
 ```
 
 Этот режим трогает `apt` и репозитории пакетов, поэтому его стоит запускать только после проверки ОС Raspberry Pi.
+
+После reboot малины проверь:
+
+```bash
+systemctl is-active host-monitor
+systemctl is-active amneziawg-client@awg0
+ip addr show awg0
+```
 
 ## Диагностика
 
@@ -124,6 +146,26 @@ sudo bash ./remote_access/amnezia/install_reverse_ssh.sh \
   --remote-ssh-port 2222 \
   --enable-vnc \
   --remote-vnc-port 5901
+```
+
+Проверка на Raspberry Pi:
+
+```bash
+sudo systemctl status reverse-ssh.service --no-pager
+sudo journalctl -u reverse-ssh.service -n 50 --no-pager
+```
+
+Подключение через fallback:
+
+```bash
+ssh root@<SERVER_IP>
+ssh -p 2222 <RPI_USER>@127.0.0.1
+```
+
+Проверка на сервере, что reverse-порты не торчат наружу:
+
+```bash
+ss -ltn | grep -E '127.0.0.1:(2222|5901)'
 ```
 
 ## Откат
