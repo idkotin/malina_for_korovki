@@ -15,6 +15,7 @@ SKIP_START=0
 SERVICE_ALLOWED_IPS=""
 KEEP_DNS=0
 PREPARED_CONFIG=""
+TMP_GNUPG=""
 
 usage() {
   cat <<'EOF'
@@ -196,7 +197,7 @@ ensure_system_commands() {
 }
 
 install_packages_with_apt() {
-  local os_id os_like header_pkg
+  local os_id os_like header_pkg keyring_path
 
   command_exists apt-get || die "apt-get is not available on this system"
   [[ -r /etc/os-release ]] || die "Cannot detect OS: /etc/os-release is missing"
@@ -206,6 +207,7 @@ install_packages_with_apt() {
   os_id="${ID:-}"
   os_like="${ID_LIKE:-}"
   header_pkg="linux-headers-$(uname -r)"
+  keyring_path="/usr/share/keyrings/amneziawg-archive-keyring.gpg"
 
   log "Installing AmneziaWG package with apt"
   apt-get update
@@ -229,11 +231,16 @@ install_packages_with_apt() {
   elif [[ "${os_id}" == "debian" || "${os_id}" == "raspbian" || "${os_like}" == *debian* ]]; then
     warn "Using the Debian/Raspberry Pi OS package path from the current upstream AmneziaWG README."
     if ! grep -Rq 'ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null; then
-      apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 57290828
+      TMP_GNUPG="$(mktemp -d)"
+      chmod 700 "${TMP_GNUPG}"
+      GNUPGHOME="${TMP_GNUPG}" gpg --batch --keyserver keyserver.ubuntu.com --recv-keys 57290828
+      GNUPGHOME="${TMP_GNUPG}" gpg --batch --yes --output "${keyring_path}" --export 57290828
+      rm -rf "${TMP_GNUPG}"
+      TMP_GNUPG=""
       install -d -m 755 /etc/apt/sources.list.d
       printf '%s\n' \
-        'deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' \
-        'deb-src https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main' > /etc/apt/sources.list.d/amneziawg-ppa.list
+        "deb [signed-by=${keyring_path}] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" \
+        "deb-src [signed-by=${keyring_path}] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" > /etc/apt/sources.list.d/amneziawg-ppa.list
     fi
   else
     die "Automatic package install is only prepared for Debian/Ubuntu-like systems."
@@ -310,5 +317,5 @@ Useful commands:
 EOF
 }
 
-trap '[[ -n "${PREPARED_CONFIG}" && "${PREPARED_CONFIG}" != "${CONFIG_SOURCE}" ]] && rm -f "${PREPARED_CONFIG}"' EXIT
+trap '[[ -n "${PREPARED_CONFIG}" && "${PREPARED_CONFIG}" != "${CONFIG_SOURCE}" ]] && rm -f "${PREPARED_CONFIG}"; [[ -n "${TMP_GNUPG}" ]] && rm -rf "${TMP_GNUPG}"' EXIT
 main "$@"
