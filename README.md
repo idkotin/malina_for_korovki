@@ -129,6 +129,11 @@ Important fields:
 - `send.url`: telemetry API URL
 - `events.url`: SMS/call events API URL
 - `send.interval_s`: telemetry period
+- `send.idle_sleep_enabled`: slow down telemetry sending when the machine is stationary
+- `send.idle_after_s`: seconds without confirmed movement before slow sending starts
+- `send.idle_interval_s`: telemetry period while stationary sleep mode is active
+- `send.movement_confirm_s`: sustained movement duration required to return to normal sending
+- `send.movement_speed_kmh`: GPS speed threshold for movement confirmation
 - `gps.port`: fixed GPS serial port (`null` for auto-detect)
 - `gps.port_candidates`: candidate GPS ports
 - `lte.at_ports`: candidate AT ports
@@ -154,6 +159,8 @@ weight:
   channel_pos: 0
   channel_neg: 1
 ```
+
+Stationary sleep mode only skips regular telemetry sends. GPS, weight, modem events and buffer flushing keep running on the normal loop, so short GPS speed spikes do not immediately wake the sender.
 
 ## 4) Existing load-cell system integration
 

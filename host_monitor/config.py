@@ -19,6 +19,11 @@ class SendCfg(BaseModel):
     interval_s: float = 0.5
     timeout_s: float = 3.0
     max_batch: int = 50
+    idle_sleep_enabled: bool = True
+    idle_after_s: float = 900.0
+    idle_interval_s: float = 120.0
+    movement_confirm_s: float = 5.0
+    movement_speed_kmh: float = 2.0
 
 
 class EventsCfg(BaseModel):

@@ -90,8 +90,20 @@ def main(argv: list[str] | None = None) -> None:
     last_events_flush = 0.0
     telemetry_flush_backoff_s = 1.0
     events_flush_backoff_s = 1.0
+    last_telemetry_send = 0.0
+    last_confirmed_movement = time.time()
+    movement_candidate_since: float | None = None
+    sleep_active = False
 
-    log.info("started device_id=%s url=%s interval_s=%s", cfg.device.id, cfg.send.url, cfg.send.interval_s)
+    log.info(
+        "started device_id=%s url=%s interval_s=%s idle_sleep_enabled=%s idle_after_s=%s idle_interval_s=%s",
+        cfg.device.id,
+        cfg.send.url,
+        cfg.send.interval_s,
+        cfg.send.idle_sleep_enabled,
+        cfg.send.idle_after_s,
+        cfg.send.idle_interval_s,
+    )
 
     try:
         while True:
@@ -152,12 +164,53 @@ def main(argv: list[str] | None = None) -> None:
             )
             payload = telemetry.model_dump(mode="json")
 
+            now = time.time()
+            movement_speed_threshold = max(0.0, float(cfg.send.movement_speed_kmh))
+            movement_confirm_s = max(0.0, float(cfg.send.movement_confirm_s))
+            idle_after_s = max(0.0, float(cfg.send.idle_after_s))
+            idle_interval_s = max(float(cfg.send.interval_s), float(cfg.send.idle_interval_s))
+            speed_kmh = float(payload.get("speed_kmh") or 0.0)
+            movement_sample = bool(gps_valid and speed_kmh >= movement_speed_threshold)
+
+            if cfg.send.idle_sleep_enabled:
+                if movement_sample:
+                    if movement_candidate_since is None:
+                        movement_candidate_since = now
+                    if now - movement_candidate_since >= movement_confirm_s:
+                        last_confirmed_movement = now
+                else:
+                    movement_candidate_since = None
+                sleep_active = now - last_confirmed_movement >= idle_after_s
+            else:
+                movement_candidate_since = None
+                sleep_active = False
+                last_confirmed_movement = now
+
+            current_send_interval_s = idle_interval_s if sleep_active else float(cfg.send.interval_s)
+            should_send_telemetry = (
+                last_telemetry_send <= 0.0 or now - last_telemetry_send >= current_send_interval_s
+            )
+            module_status["telemetry_send"] = {
+                "sleep_active": sleep_active,
+                "current_interval_s": current_send_interval_s,
+                "idle_after_s": idle_after_s,
+                "idle_for_s": now - last_confirmed_movement,
+                "movement_candidate_s": (now - movement_candidate_since) if movement_candidate_since else None,
+                "movement_speed_threshold_kmh": movement_speed_threshold,
+                "current_speed_kmh": speed_kmh,
+            }
+
             # Send current payload (if fails -> buffer)
-            try:
-                sender.send_one(payload)
-            except Exception as e:
-                module_status["send_error"] = str(e)
-                telemetry_q.put(payload)
+            if should_send_telemetry:
+                try:
+                    sender.send_one(payload)
+                except Exception as e:
+                    module_status["send_error"] = str(e)
+                    telemetry_q.put(payload)
+                finally:
+                    last_telemetry_send = now
+            else:
+                module_status["telemetry_send"]["skipped_current"] = True
 
             # Drain modem events -> send/buffer
             for ev in events_reader.drain(max_items=20):
