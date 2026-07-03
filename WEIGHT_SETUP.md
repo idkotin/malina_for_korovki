@@ -27,11 +27,13 @@ weight:
   sample_count: 80
   adc2_rate: "ADS1263_ADC2_100SPS"
   trim_fraction: 0.2
-  smoothing_alpha: 0.08
-  fast_smoothing_alpha: 0.35
-  fast_change_threshold_kg: 40.0
+  smoothing_alpha: 0.12
+  fast_smoothing_alpha: 0.45
+  fast_change_threshold_kg: 30.0
   zero_deadband_kg: 10.0
-  median_window: 9
+  median_window: 5
+  invalid_below_kg: -1000.0
+  invalid_above_kg: null
 ```
 
 ## Notes
@@ -39,3 +41,4 @@ weight:
 - `adc1` is kept only as a legacy fallback.
 - `ref_pos/ref_neg` are ignored in the default passive `adc2` path.
 - After switching from the old adc1/external-reference scheme, recalibration is required.
+- Values below `invalid_below_kg` are sent as `weight_valid: false` and are not fed into the smoothing filter.

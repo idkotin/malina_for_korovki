@@ -143,6 +143,9 @@ Important fields:
 - `weight.channel_pos` / `weight.channel_neg`: ADC measurement pair
 - `weight.frontend`: `adc2` for passive parallel sniffing, `adc1` for legacy direct path
 - `weight.reference_mode`: `internal` for passive parallel mode, `avdd` for standalone bridge power mode
+- `weight.smoothing_alpha`: normal telemetry weight smoothing; larger values react faster
+- `weight.fast_smoothing_alpha`: smoothing used for larger weight jumps
+- `weight.invalid_below_kg` / `weight.invalid_above_kg`: calibrated weight limits; out-of-range values send `weight_valid: false` and do not update the filter
 
 Telemetry health flags:
 

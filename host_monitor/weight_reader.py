@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 import json
 import logging
+import math
 import random
 import statistics
 import sys
@@ -35,11 +36,13 @@ class WeightCfg:
     adc2_rate: str
     trim_fraction: float = 0.1
     smoothing_alpha: float = 0.12
-    fast_smoothing_alpha: float = 0.35
-    fast_change_threshold_kg: float = 40.0
+    fast_smoothing_alpha: float = 0.45
+    fast_change_threshold_kg: float = 30.0
     zero_deadband_kg: float = 10.0
-    median_window: int = 7
+    median_window: int = 5
     min_ref_abs: float = 1e-9
+    invalid_below_kg: float | None = -1000.0
+    invalid_above_kg: float | None = None
 
 
 @dataclass
@@ -87,6 +90,7 @@ class WeightReader:
         self._ads_measurement_sign = 1.0
         self._filtered_weight: float | None = None
         self._recent_weights: deque[float] = deque(maxlen=max(1, int(cfg.median_window)))
+        self._invalid_weight_reads = 0
 
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
@@ -302,12 +306,30 @@ class WeightReader:
             return base + drift * 10.0
         raise RuntimeError("weight driver not implemented yet (disable weight or enable simulate)")
 
+    def _is_valid_weight_value(self, value: float) -> bool:
+        if not math.isfinite(value):
+            return False
+        if self._cfg.invalid_below_kg is not None and value < float(self._cfg.invalid_below_kg):
+            return False
+        if self._cfg.invalid_above_kg is not None and value > float(self._cfg.invalid_above_kg):
+            return False
+        return True
+
     def read_weight(self) -> Weight:
         if not self._cfg.enabled:
             return Weight(weight=None)
         try:
             raw = self.read_raw()
             value = (raw - self._cal.offset) * self._cal.scale
+            if not self._is_valid_weight_value(float(value)):
+                self._filtered_weight = None
+                self._recent_weights.clear()
+                self._invalid_weight_reads += 1
+                if self._invalid_weight_reads == 1 or self._invalid_weight_reads % 60 == 0:
+                    log.warning("weight value rejected as invalid: %s", value)
+                return Weight(weight=None)
+
+            self._invalid_weight_reads = 0
             alpha = max(0.0, min(1.0, float(self._cfg.smoothing_alpha)))
             fast_alpha = max(alpha, min(1.0, float(self._cfg.fast_smoothing_alpha)))
             fast_threshold = max(0.0, float(self._cfg.fast_change_threshold_kg))

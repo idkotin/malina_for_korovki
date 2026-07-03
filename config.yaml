@@ -56,12 +56,14 @@ weight:
   adc2_rate: "ADS1263_ADC2_100SPS"
   # Ratio filtering
   trim_fraction: 0.2
-  smoothing_alpha: 0.08
-  fast_smoothing_alpha: 0.35
-  fast_change_threshold_kg: 40.0
+  smoothing_alpha: 0.12
+  fast_smoothing_alpha: 0.45
+  fast_change_threshold_kg: 30.0
   zero_deadband_kg: 10.0
-  median_window: 9
+  median_window: 5
   min_ref_abs: 0.000000001
+  invalid_below_kg: -1000.0
+  invalid_above_kg: null
 
 wifi:
   enabled: true

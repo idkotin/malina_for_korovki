@@ -67,6 +67,8 @@ def main(argv: list[str] | None = None) -> None:
             zero_deadband_kg=cfg.weight.zero_deadband_kg,
             median_window=cfg.weight.median_window,
             min_ref_abs=cfg.weight.min_ref_abs,
+            invalid_below_kg=cfg.weight.invalid_below_kg,
+            invalid_above_kg=cfg.weight.invalid_above_kg,
         )
     )
 
