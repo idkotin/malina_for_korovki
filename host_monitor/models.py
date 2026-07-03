@@ -15,6 +15,7 @@ class Position(BaseModel):
 
 class Weight(BaseModel):
     weight: float | None = None
+    raw: float | None = None
 
 
 class SystemInfo(BaseModel):
@@ -35,6 +36,7 @@ class Telemetry(BaseModel):
     gps_satellites: int = 0
     speed_kmh: float = 0.0
     weight: float = 0.0
+    raw: float = 0.0
     weight_valid: bool = False
     gps_quality: int = 0
     wifi_clients: list[str] = Field(default_factory=list)

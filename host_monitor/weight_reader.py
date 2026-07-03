@@ -327,7 +327,7 @@ class WeightReader:
                 self._invalid_weight_reads += 1
                 if self._invalid_weight_reads == 1 or self._invalid_weight_reads % 60 == 0:
                     log.warning("weight value rejected as invalid: %s", value)
-                return Weight(weight=None)
+                return Weight(weight=None, raw=float(value))
 
             self._invalid_weight_reads = 0
             alpha = max(0.0, min(1.0, float(self._cfg.smoothing_alpha)))
@@ -348,7 +348,7 @@ class WeightReader:
             if abs(display_weight) <= zero_deadband and abs(float(median_value)) <= zero_deadband:
                 display_weight = 0.0
                 self._filtered_weight = 0.0
-            return Weight(weight=display_weight)
+            return Weight(weight=display_weight, raw=float(value))
         except Exception as e:
             log.warning("weight read failed: %s", e)
             return Weight(weight=None)

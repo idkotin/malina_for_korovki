@@ -24,6 +24,7 @@ English version: [README.md](./README.md)
   "gps_satellites": 12,
   "speed_kmh": 18.52,
   "weight": 1234.56,
+  "raw": 1236.78,
   "weight_valid": true,
   "gps_quality": 1,
   "wifi_clients": ["aa:bb:cc:dd:ee:ff"],
@@ -38,6 +39,8 @@ English version: [README.md](./README.md)
 
 - `gps_valid`: `true`, когда текущие координаты получены из валидного GPS fix
 - `speed_kmh`: скорость по GPS в км/ч, берется из NMEA RMC; `0.0`, если валидного GPS fix нет
+- `weight`: сглаженный вес в кг после медианы/EMA-фильтра
+- `raw`: откалиброванный вес в кг до медианы и сглаживания; нужен для диагностики и фильтрации на сервере
 - `weight_valid`: `true`, когда текущее значение веса считано без ошибки
 - `events_reader_ok`: `true`, когда reader событий модема работает нормально, либо когда события модема отключены в конфиге
 

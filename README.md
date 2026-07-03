@@ -24,6 +24,7 @@ Current telemetry payload:
   "gps_satellites": 12,
   "speed_kmh": 18.52,
   "weight": 1234.56,
+  "raw": 1236.78,
   "weight_valid": true,
   "gps_quality": 1,
   "wifi_clients": ["aa:bb:cc:dd:ee:ff"],
@@ -38,6 +39,8 @@ Field meaning for health flags:
 
 - `gps_valid`: `true` when current GPS coordinates come from a valid fix
 - `speed_kmh`: GPS speed over ground in km/h, parsed from NMEA RMC; `0.0` when there is no valid fix
+- `weight`: filtered weight in kg after median/EMA smoothing
+- `raw`: calibrated weight in kg before median/EMA smoothing; useful for diagnostics and backend-side filtering
 - `weight_valid`: `true` when the current weight value was read successfully
 - `events_reader_ok`: `true` when the modem events reader is healthy, or when modem events are disabled in config
 
