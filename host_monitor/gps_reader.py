@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import serial
@@ -50,6 +51,28 @@ def _parse_float(value: str) -> float | None:
         return None
 
 
+def _parse_rmc_timestamp(time_str: str, date_str: str) -> str | None:
+    # RMC time/date are UTC: hhmmss.sss and ddmmyy.
+    if not time_str or not date_str:
+        return None
+    try:
+        clean_time = time_str.split("*", 1)[0]
+        clean_date = date_str.split("*", 1)[0]
+        if len(clean_time) < 6 or len(clean_date) != 6:
+            return None
+
+        hour = int(clean_time[0:2])
+        minute = int(clean_time[2:4])
+        second = int(float(clean_time[4:]))
+        day = int(clean_date[0:2])
+        month = int(clean_date[2:4])
+        year_2 = int(clean_date[4:6])
+        year = 2000 + year_2 if year_2 < 80 else 1900 + year_2
+        return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception:
+        return None
+
+
 def _parse_nmea_line(line: str) -> Position | None:
     # We keep it minimal: accept GGA or RMC.
     if not line.startswith("$"):
@@ -77,17 +100,18 @@ def _parse_nmea_line(line: str) -> Position | None:
         lat, lon = latlon
         return Position(lat=lat, lon=lon, quality=quality, satellites=satellites)
 
-    if kind.endswith("RMC") and len(parts) >= 7:
-        # $..RMC,time,status,lat,N,lon,E,speed_knots,...
+    if kind.endswith("RMC") and len(parts) >= 10:
+        # $..RMC,time,status,lat,N,lon,E,speed_knots,course,date,...
         status = parts[2].upper() if parts[2] else ""
         ok = status == "A"
         latlon = _parse_lat_lon(parts[3], parts[4], parts[5], parts[6])
         speed_knots = _parse_float(parts[7]) if len(parts) >= 8 else None
         speed_kmh = speed_knots * 1.852 if speed_knots is not None and ok else None
+        timestamp_utc = _parse_rmc_timestamp(parts[1], parts[9])
         if latlon is None:
-            return Position(speed_kmh=speed_kmh)
+            return Position(timestamp_utc=timestamp_utc, speed_kmh=speed_kmh)
         lat, lon = latlon
-        return Position(lat=lat, lon=lon, quality=1 if ok else 0, speed_kmh=speed_kmh)
+        return Position(lat=lat, lon=lon, timestamp_utc=timestamp_utc, quality=1 if ok else 0, speed_kmh=speed_kmh)
 
     if kind.endswith("GNS") and len(parts) >= 8:
         # $..GNS,time,lat,N,lon,E,mode,num_sats,...
@@ -111,6 +135,7 @@ def _merge_position(base: Position, update: Position) -> Position:
     return Position(
         lat=update.lat if update.lat is not None else base.lat,
         lon=update.lon if update.lon is not None else base.lon,
+        timestamp_utc=update.timestamp_utc if update.timestamp_utc is not None else base.timestamp_utc,
         quality=update.quality if update.quality is not None else base.quality,
         satellites=update.satellites if update.satellites is not None else base.satellites,
         speed_kmh=update.speed_kmh if update.speed_kmh is not None else base.speed_kmh,

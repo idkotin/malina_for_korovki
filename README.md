@@ -37,6 +37,7 @@ Current telemetry payload:
 
 Field meaning for health flags:
 
+- `timestamp`: UTC timestamp from the GPS RMC sentence when GPS fix is valid; falls back to Raspberry Pi UTC time when GPS time is unavailable
 - `gps_valid`: `true` when current GPS coordinates come from a valid fix
 - `speed_kmh`: GPS speed over ground in km/h, parsed from NMEA RMC; `0.0` when there is no valid fix
 - `weight`: filtered weight in kg after median/EMA smoothing

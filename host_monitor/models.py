@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class Position(BaseModel):
     lat: float | None = None
     lon: float | None = None
+    timestamp_utc: str | None = None
     quality: int | None = None  # 0=no fix, 1=GPS fix, 2=DGPS...
     satellites: int | None = None
     speed_kmh: float | None = None
