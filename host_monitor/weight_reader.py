@@ -91,6 +91,8 @@ class WeightReader:
         self._filtered_weight: float | None = None
         self._recent_weights: deque[float] = deque(maxlen=max(1, int(cfg.median_window)))
         self._invalid_weight_reads = 0
+        self._reseed_after_invalid = False
+        self._reseed_valid_reads = 0
 
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
@@ -325,11 +327,27 @@ class WeightReader:
                 self._filtered_weight = None
                 self._recent_weights.clear()
                 self._invalid_weight_reads += 1
+                self._reseed_after_invalid = True
+                self._reseed_valid_reads = 0
                 if self._invalid_weight_reads == 1 or self._invalid_weight_reads % 60 == 0:
                     log.warning("weight value rejected as invalid: %s", value)
                 return Weight(weight=None, raw=float(value))
 
             self._invalid_weight_reads = 0
+            if self._reseed_after_invalid:
+                self._recent_weights.append(float(value))
+                self._reseed_valid_reads += 1
+                if self._reseed_valid_reads == 1:
+                    self._filtered_weight = float(value)
+                    return Weight(weight=float(value), raw=float(value))
+
+                median_value = float(statistics.median(self._recent_weights))
+                self._filtered_weight = median_value
+                if self._reseed_valid_reads >= 2:
+                    self._reseed_after_invalid = False
+                    self._reseed_valid_reads = 0
+                return Weight(weight=median_value, raw=float(value))
+
             alpha = max(0.0, min(1.0, float(self._cfg.smoothing_alpha)))
             fast_alpha = max(alpha, min(1.0, float(self._cfg.fast_smoothing_alpha)))
             fast_threshold = max(0.0, float(self._cfg.fast_change_threshold_kg))
