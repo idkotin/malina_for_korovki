@@ -37,7 +37,6 @@ English version: [README.md](./README.md)
 
 Что означают флаги состояния:
 
-- `timestamp`: UTC-время из GPS RMC, когда GPS fix валиден; если GPS-времени нет, используется UTC-время Raspberry Pi
 - `gps_valid`: `true`, когда текущие координаты получены из валидного GPS fix
 - `speed_kmh`: скорость по GPS в км/ч, берется из NMEA RMC; `0.0`, если валидного GPS fix нет
 - `weight`: сглаженный вес в кг после медианы/EMA-фильтра

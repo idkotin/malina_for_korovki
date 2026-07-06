@@ -29,14 +29,13 @@ def build_telemetry(
     speed_kmh = position.speed_kmh if gps_valid and position.speed_kmh is not None else 0.0
     weight_kg = weight.weight if weight.weight is not None else 0.0
     raw_weight_kg = weight.raw if weight.raw is not None else 0.0
-    timestamp = position.timestamp_utc if gps_valid and position.timestamp_utc else utc_now_iso_no_tz()
 
     lte_rssi = lte.rssi_dbm if lte.rssi_dbm is not None else 0
     lte_access_tech = lte.access_tech if lte.access_tech is not None else "0"
 
     return Telemetry(
         device_id=device_id,
-        timestamp=timestamp,
+        timestamp=utc_now_iso_no_tz(),
         lat=lat,
         lon=lon,
         gps_valid=gps_valid,
