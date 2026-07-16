@@ -9,6 +9,18 @@ import httpx
 log = logging.getLogger("host_monitor.sender")
 
 
+def is_permanent_http_error(error: Exception) -> bool:
+    """Return whether retrying this HTTP failure cannot fix the payload.
+
+    Timeouts, server failures, rate limits, and request timeouts are transient.
+    Other 4xx responses describe a request the server will continue to reject.
+    """
+    if not isinstance(error, httpx.HTTPStatusError):
+        return False
+    status_code = error.response.status_code
+    return 400 <= status_code < 500 and status_code not in (408, 429)
+
+
 def _sanitize_telemetry_payload(payload: dict) -> dict:
     """
     Server expects numeric fields as floats.
@@ -35,6 +47,23 @@ def _sanitize_telemetry_payload(payload: dict) -> dict:
 
     if payload.get("wifi_clients") is None:
         payload["wifi_clients"] = []
+
+    lat = payload.get("lat")
+    lon = payload.get("lon")
+    coordinates_valid = (
+        isinstance(lat, (int, float))
+        and not isinstance(lat, bool)
+        and isinstance(lon, (int, float))
+        and not isinstance(lon, bool)
+        and -90.0 <= float(lat) <= 90.0
+        and -180.0 <= float(lon) <= 180.0
+    )
+    if not coordinates_valid:
+        log.warning("buffered telemetry has invalid coordinates; sending it without a GPS fix")
+        payload["lat"] = 0.0
+        payload["lon"] = 0.0
+        payload["gps_valid"] = False
+        payload["speed_kmh"] = 0.0
 
     return payload
 

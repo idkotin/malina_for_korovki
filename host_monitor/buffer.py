@@ -49,6 +49,22 @@ class SqliteQueue:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_{t}_id ON {t}(id);".format(t=self._table)
         )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS {table}_dead_letter (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              queue_id INTEGER NOT NULL,
+              queued_created_utc TEXT NOT NULL,
+              failed_utc TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              failure_reason TEXT NOT NULL
+            );
+            """.format(table=self._table)
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_{t}_dead_letter_queue_id "
+            "ON {t}_dead_letter(queue_id);".format(t=self._table)
+        )
         self._conn.commit()
 
     def put(self, payload: dict) -> None:
@@ -96,6 +112,32 @@ class SqliteQueue:
         q = ",".join(["?"] * len(ids))
         self._conn.execute("DELETE FROM {t} WHERE id IN ({q});".format(t=self._table, q=q), ids)
         self._conn.commit()
+
+    def move_to_dead_letter(self, row_id: int, reason: str) -> bool:
+        """Move one permanently rejected row out of the FIFO queue.
+
+        The insert and delete share one SQLite transaction, so a rejected
+        packet is either retained in the queue or retained for diagnostics.
+        """
+        cur = self._conn.execute(
+            "SELECT created_utc, payload_json FROM {t} WHERE id = ?;".format(t=self._table),
+            (row_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+
+        self._conn.execute(
+            """
+            INSERT INTO {t}_dead_letter(
+              queue_id, queued_created_utc, failed_utc, payload_json, failure_reason
+            ) VALUES(?, ?, ?, ?, ?);
+            """.format(t=self._table),
+            (row_id, str(row[0]), utc_now_iso(), str(row[1]), reason),
+        )
+        self._conn.execute("DELETE FROM {t} WHERE id = ?;".format(t=self._table), (row_id,))
+        self._conn.commit()
+        return True
 
     def count(self) -> int:
         cur = self._conn.execute("SELECT COUNT(*) FROM {t};".format(t=self._table))

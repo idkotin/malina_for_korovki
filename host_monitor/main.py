@@ -11,7 +11,7 @@ from host_monitor.log_setup import setup_logging
 from host_monitor.lte_info import LteCfg as LteCfgDC
 from host_monitor.lte_info import get_lte_info
 from host_monitor.modem_events import ModemEventsCfg, ModemEventsReader
-from host_monitor.sender import Sender
+from host_monitor.sender import Sender, is_permanent_http_error
 from host_monitor.system_info import read_cpu_temp_c
 from host_monitor.telemetry_builder import build_telemetry
 from host_monitor.weight_reader import WeightCfg as WeightCfgDC
@@ -131,7 +131,15 @@ def main(argv: list[str] | None = None) -> None:
                     LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
                 )
             cpu_temp = read_cpu_temp_c()
-            gps_valid = pos.lat is not None and pos.lon is not None and (pos.quality or 0) > 0
+            coordinates_in_range = (
+                pos.lat is not None
+                and pos.lon is not None
+                and -90.0 <= pos.lat <= 90.0
+                and -180.0 <= pos.lon <= 180.0
+            )
+            if pos.lat is not None and pos.lon is not None and not coordinates_in_range:
+                log.warning("invalid GPS coordinates ignored: lat=%s lon=%s", pos.lat, pos.lon)
+            gps_valid = coordinates_in_range and (pos.quality or 0) > 0
             weight_valid = w.weight is not None
             events_status = events_reader.status()
             events_reader_ok = (not cfg.lte.events_enabled) or (
@@ -243,7 +251,20 @@ def main(argv: list[str] | None = None) -> None:
                     batch = telemetry_q.peek_batch(cfg.send.max_batch)
                     if batch:
                         for rid, payload_json in batch:
-                            sender.send_buffered_telemetry_one(payload_json)
+                            try:
+                                sender.send_buffered_telemetry_one(payload_json)
+                            except Exception as error:
+                                if not is_permanent_http_error(error):
+                                    raise
+                                reason = f"HTTP {error.response.status_code}: {error}"
+                                moved = telemetry_q.move_to_dead_letter(rid, reason)
+                                if moved:
+                                    log.error(
+                                        "telemetry queue row %s permanently rejected; moved to dead letter: %s",
+                                        rid,
+                                        reason,
+                                    )
+                                continue
                             telemetry_q.delete_ids([rid])
                     telemetry_flush_backoff_s = 1.0
                 except Exception as e:
@@ -256,7 +277,20 @@ def main(argv: list[str] | None = None) -> None:
                     batch = events_q.peek_batch(cfg.events.max_batch)
                     if batch:
                         for rid, payload_json in batch:
-                            events_sender.send_json_string_one(payload_json)
+                            try:
+                                events_sender.send_json_string_one(payload_json)
+                            except Exception as error:
+                                if not is_permanent_http_error(error):
+                                    raise
+                                reason = f"HTTP {error.response.status_code}: {error}"
+                                moved = events_q.move_to_dead_letter(rid, reason)
+                                if moved:
+                                    log.error(
+                                        "events queue row %s permanently rejected; moved to dead letter: %s",
+                                        rid,
+                                        reason,
+                                    )
+                                continue
                             events_q.delete_ids([rid])
                     events_flush_backoff_s = 1.0
                 except Exception as e:

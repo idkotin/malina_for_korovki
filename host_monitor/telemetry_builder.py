@@ -22,8 +22,15 @@ def build_telemetry(
     weight_valid: bool,
     events_reader_ok: bool,
 ) -> Telemetry:
-    lat = position.lat if position.lat is not None else 0.0
-    lon = position.lon if position.lon is not None else 0.0
+    coordinates_valid = (
+        position.lat is not None
+        and position.lon is not None
+        and -90.0 <= position.lat <= 90.0
+        and -180.0 <= position.lon <= 180.0
+    )
+    lat = position.lat if coordinates_valid else 0.0
+    lon = position.lon if coordinates_valid else 0.0
+    gps_valid = gps_valid and coordinates_valid
     gps_quality = position.quality if position.quality is not None else 0
     gps_satellites = position.satellites if position.satellites is not None else 0
     speed_kmh = position.speed_kmh if gps_valid and position.speed_kmh is not None else 0.0

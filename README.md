@@ -426,6 +426,21 @@ To print complete raw JSON for each buffered event:
 host-monitor-events --config ./config.yaml --limit 10 --full-json
 ```
 
+### Rejected packets (dead letter)
+
+Buffered packets that receive a permanent HTTP client error (most `4xx`, except
+`408` and `429`) are moved to a separate SQLite table so one malformed packet
+cannot block the FIFO queue. Inspect them without deleting anything:
+
+```bash
+cd /opt/host-monitor
+sqlite3 ./data/buffer.sqlite3 "select queue_id, queued_created_utc, failed_utc, failure_reason, substr(payload_json,1,300) from telemetry_dead_letter order by id desc limit 20;"
+```
+
+Coordinates outside the valid latitude/longitude ranges are sent as `0, 0` with
+`gps_valid: false`. This also repairs older buffered packets with corrupted GPS
+coordinates before they are resent.
+
 Clear only buffered telemetry rows:
 
 ```bash
