@@ -137,6 +137,8 @@ Important fields:
 - `send.idle_interval_s`: telemetry period while stationary sleep mode is active
 - `send.movement_confirm_s`: sustained movement duration required to return to normal sending
 - `send.movement_speed_kmh`: GPS speed threshold for movement confirmation
+- `wifi.scan_interval_s`: background Wi-Fi client polling interval
+- `wifi.max_snapshot_age_s`: maximum client snapshot age; older snapshots are reported as empty
 - `gps.port`: fixed GPS serial port (`null` for auto-detect)
 - `gps.port_candidates`: candidate GPS ports
 - `lte.at_ports`: candidate AT ports
@@ -167,6 +169,8 @@ weight:
 ```
 
 Stationary sleep mode only skips regular telemetry sends. GPS, weight, modem events and buffer flushing keep running on the normal loop, so short GPS speed spikes do not immediately wake the sender.
+
+Weight sampling, Wi-Fi polling, HTTP sending, and SQLite backlog flushing run in separate background threads. A slow ADS1263 read or a large backlog therefore does not reduce the fresh telemetry scheduling rate. Failed Wi-Fi scans clear the previous client list instead of reusing stale connected devices.
 
 ## 4) Existing load-cell system integration
 

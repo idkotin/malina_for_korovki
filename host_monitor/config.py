@@ -90,6 +90,8 @@ class WifiCfg(BaseModel):
     enabled: bool = True
     hostapd_cli: str = "hostapd_cli"
     ap_interface: str = "wlan0"
+    scan_interval_s: float = 1.0
+    max_snapshot_age_s: float = 2.0
 
 
 class LteCfg(BaseModel):

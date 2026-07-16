@@ -71,6 +71,10 @@ wifi:
   hostapd_cli: "hostapd_cli"
   # Fallback method: parse "ip neigh" and filter by interface
   ap_interface: "wlan0"
+  # Poll in the background so Wi-Fi commands never delay telemetry.
+  scan_interval_s: 1.0
+  # Never report an old non-empty client list after polling stalls.
+  max_snapshot_age_s: 2.0
 
 lte:
   enabled: true

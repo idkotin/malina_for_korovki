@@ -9,6 +9,7 @@ from dataclasses import dataclass
 log = logging.getLogger("host_monitor.wifi")
 
 MAC_RE = re.compile(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
+ACTIVE_NEIGH_STATES = {"REACHABLE", "DELAY", "PROBE", "PERMANENT"}
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,19 @@ def _parse_hostapd_all_sta(text: str) -> list[str]:
     return sorted(set(macs))
 
 
+def _parse_active_ip_neigh(text: str) -> list[str]:
+    """Exclude stale neighbor-cache entries that may belong to disconnected clients."""
+    macs: list[str] = []
+    for line in text.splitlines():
+        fields = line.upper().split()
+        if not ACTIVE_NEIGH_STATES.intersection(fields):
+            continue
+        match = MAC_RE.search(line)
+        if match:
+            macs.append(match.group(1).lower())
+    return sorted(set(macs))
+
+
 def get_wifi_clients(cfg: WifiCfg) -> tuple[list[str], str | None]:
     if not cfg.enabled:
         return [], None
@@ -46,8 +60,7 @@ def get_wifi_clients(cfg: WifiCfg) -> tuple[list[str], str | None]:
     # Fallback: ip neigh show dev wlan0
     rc2, out2 = _run(["ip", "neigh", "show", "dev", cfg.ap_interface])
     if rc2 == 0:
-        macs = [m.group(1).lower() for m in MAC_RE.finditer(out2)]
-        return sorted(set(macs)), None
+        return _parse_active_ip_neigh(out2), None
 
     return [], f"hostapd_cli/ip failed: {out or out2}"
 

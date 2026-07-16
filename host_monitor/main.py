@@ -10,41 +10,22 @@ from host_monitor.gps_reader import GpsReader
 from host_monitor.log_setup import setup_logging
 from host_monitor.lte_info import LteCfg as LteCfgDC
 from host_monitor.lte_info import get_lte_info
+from host_monitor.models import LteInfo
 from host_monitor.modem_events import ModemEventsCfg, ModemEventsReader
-from host_monitor.sender import Sender, is_permanent_http_error
 from host_monitor.system_info import read_cpu_temp_c
 from host_monitor.telemetry_builder import build_telemetry
 from host_monitor.weight_reader import WeightCfg as WeightCfgDC
 from host_monitor.weight_reader import WeightReader
 from host_monitor.wifi_clients import WifiCfg as WifiCfgDC
 from host_monitor.wifi_clients import get_wifi_clients
-from host_monitor.models import LteInfo
+from host_monitor.workers import BufferFlusher, OutboundDispatcher, WeightSampler, WifiMonitor
 
 
 log = logging.getLogger("host_monitor")
 
 
-def main(argv: list[str] | None = None) -> None:
-    args = parse_args(argv)
-    cfg = load_config(args.config)
-    ensure_dirs(cfg)
-    setup_logging(cfg.logging)
-
-    telemetry_q = SqliteQueue(sqlite_path=cfg.buffer.sqlite_path, table="telemetry", max_rows=cfg.buffer.max_rows)
-    events_q = SqliteQueue(sqlite_path=cfg.buffer.sqlite_path, table="events", max_rows=cfg.buffer.max_rows_events)
-
-    gps = GpsReader(
-        GpsCfgDC(
-            enabled=cfg.gps.enabled,
-            port=cfg.gps.port,
-            port_candidates=cfg.gps.port_candidates,
-            baud=cfg.gps.baud,
-            baud_candidates=cfg.gps.baud_candidates,
-        )
-    )
-    gps.start()
-
-    weight = WeightReader(
+def _build_weight_reader(cfg) -> WeightReader:
+    return WeightReader(
         WeightCfgDC(
             enabled=cfg.weight.enabled,
             driver=cfg.weight.driver,
@@ -72,8 +53,43 @@ def main(argv: list[str] | None = None) -> None:
         )
     )
 
-    sender = Sender(cfg.send.url, timeout_s=cfg.send.timeout_s)
-    events_sender = Sender(cfg.events.url, timeout_s=cfg.events.timeout_s)
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    cfg = load_config(args.config)
+    ensure_dirs(cfg)
+    setup_logging(cfg.logging)
+
+    # Main-thread queue handles overflow and exposes lightweight status. Worker
+    # threads open their own SQLite connections to avoid sharing transactions.
+    telemetry_q = SqliteQueue(sqlite_path=cfg.buffer.sqlite_path, table="telemetry", max_rows=cfg.buffer.max_rows)
+    events_q = SqliteQueue(sqlite_path=cfg.buffer.sqlite_path, table="events", max_rows=cfg.buffer.max_rows_events)
+
+    gps = GpsReader(
+        GpsCfgDC(
+            enabled=cfg.gps.enabled,
+            port=cfg.gps.port,
+            port_candidates=cfg.gps.port_candidates,
+            baud=cfg.gps.baud,
+            baud_candidates=cfg.gps.baud_candidates,
+        )
+    )
+    gps.start()
+
+    weight_sampler = WeightSampler(_build_weight_reader(cfg))
+    weight_sampler.start()
+
+    wifi_cfg = WifiCfgDC(
+        enabled=cfg.wifi.enabled,
+        hostapd_cli=cfg.wifi.hostapd_cli,
+        ap_interface=cfg.wifi.ap_interface,
+    )
+    wifi_monitor = WifiMonitor(
+        lambda: get_wifi_clients(wifi_cfg),
+        interval_s=cfg.wifi.scan_interval_s,
+        max_snapshot_age_s=cfg.wifi.max_snapshot_age_s,
+    )
+    wifi_monitor.start()
 
     events_reader = ModemEventsReader(
         ModemEventsCfg(
@@ -86,40 +102,67 @@ def main(argv: list[str] | None = None) -> None:
     )
     events_reader.start()
 
+    telemetry_dispatcher = OutboundDispatcher(
+        url=cfg.send.url,
+        timeout_s=cfg.send.timeout_s,
+        sqlite_path=cfg.buffer.sqlite_path,
+        table="telemetry",
+        max_rows=cfg.buffer.max_rows,
+    )
+    events_dispatcher = OutboundDispatcher(
+        url=cfg.events.url,
+        timeout_s=cfg.events.timeout_s,
+        sqlite_path=cfg.buffer.sqlite_path,
+        table="events",
+        max_rows=cfg.buffer.max_rows_events,
+    )
+    telemetry_flusher = BufferFlusher(
+        url=cfg.send.url,
+        timeout_s=cfg.send.timeout_s,
+        sqlite_path=cfg.buffer.sqlite_path,
+        table="telemetry",
+        max_rows=cfg.buffer.max_rows,
+        max_batch=cfg.send.max_batch,
+        telemetry=True,
+    )
+    events_flusher = BufferFlusher(
+        url=cfg.events.url,
+        timeout_s=cfg.events.timeout_s,
+        sqlite_path=cfg.buffer.sqlite_path,
+        table="events",
+        max_rows=cfg.buffer.max_rows_events,
+        max_batch=cfg.events.max_batch,
+        telemetry=False,
+    )
+    for worker in (telemetry_dispatcher, events_dispatcher, telemetry_flusher, events_flusher):
+        worker.start()
+
     seq = 0
     last_log = 0.0
-    last_telemetry_flush = 0.0
-    last_events_flush = 0.0
-    telemetry_flush_backoff_s = 1.0
-    events_flush_backoff_s = 1.0
     last_telemetry_send = 0.0
-    last_confirmed_movement = time.time()
+    last_confirmed_movement = time.monotonic()
     movement_candidate_since: float | None = None
     sleep_active = False
 
     log.info(
-        "started device_id=%s url=%s interval_s=%s idle_sleep_enabled=%s idle_after_s=%s idle_interval_s=%s",
+        "started device_id=%s url=%s interval_s=%s sample_count=%s wifi_scan_interval_s=%s",
         cfg.device.id,
         cfg.send.url,
         cfg.send.interval_s,
-        cfg.send.idle_sleep_enabled,
-        cfg.send.idle_after_s,
-        cfg.send.idle_interval_s,
+        cfg.weight.sample_count,
+        cfg.wifi.scan_interval_s,
     )
 
     try:
         while True:
-            t0 = time.time()
+            loop_started = time.monotonic()
             seq += 1
 
-            # Collect
             pos = gps.latest()
-            w = weight.read_weight()
-            wifi_clients, wifi_err = get_wifi_clients(
-                WifiCfgDC(enabled=cfg.wifi.enabled, hostapd_cli=cfg.wifi.hostapd_cli, ap_interface=cfg.wifi.ap_interface)
-            )
+            weight = weight_sampler.latest()
+            wifi_clients, wifi_err = wifi_monitor.latest()
+
             if cfg.lte.events_enabled:
-                # LTE metrics come from the AT events reader (prevents AT port contention).
                 lte = LteInfo()
                 snap = events_reader.lte_snapshot()
                 if snap.get("rssi_dbm") is not None:
@@ -130,7 +173,7 @@ def main(argv: list[str] | None = None) -> None:
                 lte = get_lte_info(
                     LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
                 )
-            cpu_temp = read_cpu_temp_c()
+
             coordinates_in_range = (
                 pos.lat is not None
                 and pos.lon is not None
@@ -140,41 +183,25 @@ def main(argv: list[str] | None = None) -> None:
             if pos.lat is not None and pos.lon is not None and not coordinates_in_range:
                 log.warning("invalid GPS coordinates ignored: lat=%s lon=%s", pos.lat, pos.lon)
             gps_valid = coordinates_in_range and (pos.quality or 0) > 0
-            weight_valid = w.weight is not None
             events_status = events_reader.status()
             events_reader_ok = (not cfg.lte.events_enabled) or (
                 bool(events_status.get("running")) and not events_status.get("last_error")
             )
 
-            module_status = {
-                "gps": gps.status(),
-                "telemetry_buffer_rows": telemetry_q.count(),
-                "telemetry_buffer_oldest_age_s": telemetry_q.oldest_age_s(),
-                "events_buffer_rows": events_q.count(),
-                "events_buffer_oldest_age_s": events_q.oldest_age_s(),
-                "events_reader": events_status,
-                "flush": {
-                    "telemetry_backoff_s": telemetry_flush_backoff_s,
-                    "events_backoff_s": events_flush_backoff_s,
-                },
-            }
-            if wifi_err:
-                module_status["wifi_scan_error"] = wifi_err
-
             telemetry = build_telemetry(
                 device_id=cfg.device.id,
                 position=pos,
-                weight=w,
+                weight=weight,
                 wifi_clients=wifi_clients,
-                cpu_temp_c=cpu_temp,
+                cpu_temp_c=read_cpu_temp_c(),
                 lte=lte,
                 gps_valid=gps_valid,
-                weight_valid=weight_valid,
+                weight_valid=weight.weight is not None,
                 events_reader_ok=events_reader_ok,
             )
             payload = telemetry.model_dump(mode="json")
 
-            now = time.time()
+            now = time.monotonic()
             movement_speed_threshold = max(0.0, float(cfg.send.movement_speed_kmh))
             movement_confirm_s = max(0.0, float(cfg.send.movement_confirm_s))
             idle_after_s = max(0.0, float(cfg.send.idle_after_s))
@@ -196,115 +223,50 @@ def main(argv: list[str] | None = None) -> None:
                 sleep_active = False
                 last_confirmed_movement = now
 
-            current_send_interval_s = idle_interval_s if sleep_active else float(cfg.send.interval_s)
-            should_send_telemetry = (
-                last_telemetry_send <= 0.0 or now - last_telemetry_send >= current_send_interval_s
-            )
-            module_status["telemetry_send"] = {
-                "sleep_active": sleep_active,
-                "current_interval_s": current_send_interval_s,
-                "idle_after_s": idle_after_s,
-                "idle_for_s": now - last_confirmed_movement,
-                "movement_candidate_s": (now - movement_candidate_since) if movement_candidate_since else None,
-                "movement_speed_threshold_kmh": movement_speed_threshold,
-                "current_speed_kmh": speed_kmh,
-            }
-
-            # Send current payload (if fails -> buffer)
-            if should_send_telemetry:
-                try:
-                    sender.send_one(payload)
-                except Exception as e:
-                    module_status["send_error"] = str(e)
+            current_send_interval_s = idle_interval_s if sleep_active else max(0.1, float(cfg.send.interval_s))
+            should_send = last_telemetry_send <= 0.0 or now - last_telemetry_send >= current_send_interval_s * 0.95
+            if should_send:
+                if not telemetry_dispatcher.submit(payload):
                     telemetry_q.put(payload)
-                finally:
-                    last_telemetry_send = now
-            else:
-                module_status["telemetry_send"]["skipped_current"] = True
+                    log.warning("telemetry dispatcher full; payload buffered")
+                last_telemetry_send = now
 
-            # Drain modem events -> send/buffer
-            for ev in events_reader.drain(max_items=20):
-                ev_payload = {"device_id": cfg.device.id, **ev}
-                if ev_payload.get("type") == "sms":
-                    log.info(
-                        "SMS event ready: from=%s text_len=%s",
-                        ev_payload.get("from"),
-                        len(str(ev_payload.get("text", ""))),
-                    )
-                try:
-                    events_sender.send_one(ev_payload)
-                    if ev_payload.get("type") == "sms":
-                        log.info("SMS event sent: text_len=%s", len(str(ev_payload.get("text", ""))))
-                except Exception:
-                    events_q.put(ev_payload)
-                    if ev_payload.get("type") == "sms":
-                        log.info("SMS event buffered: text_len=%s", len(str(ev_payload.get("text", ""))))
+            for event in events_reader.drain(max_items=20):
+                event_payload = {"device_id": cfg.device.id, **event}
+                if not events_dispatcher.submit(event_payload):
+                    events_q.put(event_payload)
+                    log.warning("events dispatcher full; event buffered")
 
-            # Flush buffers with backoff and time budget
-            now = time.time()
-            time_budget_s = 0.2
-            budget_end = now + time_budget_s
-
-            if now - last_telemetry_flush >= telemetry_flush_backoff_s and time.time() < budget_end:
-                last_telemetry_flush = now
-                try:
-                    batch = telemetry_q.peek_batch(cfg.send.max_batch)
-                    if batch:
-                        for rid, payload_json in batch:
-                            try:
-                                sender.send_buffered_telemetry_one(payload_json)
-                            except Exception as error:
-                                if not is_permanent_http_error(error):
-                                    raise
-                                reason = f"HTTP {error.response.status_code}: {error}"
-                                moved = telemetry_q.move_to_dead_letter(rid, reason)
-                                if moved:
-                                    log.error(
-                                        "telemetry queue row %s permanently rejected; moved to dead letter: %s",
-                                        rid,
-                                        reason,
-                                    )
-                                continue
-                            telemetry_q.delete_ids([rid])
-                    telemetry_flush_backoff_s = 1.0
-                except Exception as e:
-                    module_status["telemetry_flush_error"] = str(e)
-                    telemetry_flush_backoff_s = min(telemetry_flush_backoff_s * 2, 60.0)
-
-            if now - last_events_flush >= events_flush_backoff_s and time.time() < budget_end:
-                last_events_flush = now
-                try:
-                    batch = events_q.peek_batch(cfg.events.max_batch)
-                    if batch:
-                        for rid, payload_json in batch:
-                            try:
-                                events_sender.send_json_string_one(payload_json)
-                            except Exception as error:
-                                if not is_permanent_http_error(error):
-                                    raise
-                                reason = f"HTTP {error.response.status_code}: {error}"
-                                moved = events_q.move_to_dead_letter(rid, reason)
-                                if moved:
-                                    log.error(
-                                        "events queue row %s permanently rejected; moved to dead letter: %s",
-                                        rid,
-                                        reason,
-                                    )
-                                continue
-                            events_q.delete_ids([rid])
-                    events_flush_backoff_s = 1.0
-                except Exception as e:
-                    module_status["events_flush_error"] = str(e)
-                    events_flush_backoff_s = min(events_flush_backoff_s * 2, 60.0)
-
-            # Periodic status log
+            loop_duration_s = time.monotonic() - loop_started
             if now - last_log >= 10.0:
                 last_log = now
+                module_status = {
+                    "gps": gps.status(),
+                    "weight": weight_sampler.status(),
+                    "wifi": wifi_monitor.status(),
+                    "wifi_scan_error": wifi_err,
+                    "telemetry_buffer_rows": telemetry_q.count(),
+                    "telemetry_buffer_oldest_age_s": telemetry_q.oldest_age_s(),
+                    "events_buffer_rows": events_q.count(),
+                    "events_buffer_oldest_age_s": events_q.oldest_age_s(),
+                    "events_reader": events_status,
+                    "telemetry_dispatcher": telemetry_dispatcher.status(),
+                    "events_dispatcher": events_dispatcher.status(),
+                    "telemetry_flush": telemetry_flusher.status(),
+                    "events_flush": events_flusher.status(),
+                    "telemetry_send": {
+                        "sleep_active": sleep_active,
+                        "current_interval_s": current_send_interval_s,
+                        "idle_for_s": now - last_confirmed_movement,
+                        "current_speed_kmh": speed_kmh,
+                    },
+                    "loop_duration_s": loop_duration_s,
+                }
                 log.info(
                     "seq=%s gps_fix=%s weight=%s wifi=%s lte_rssi=%s tbuf=%s ebuf=%s status=%s",
                     seq,
                     pos.quality,
-                    w.weight,
+                    weight.weight,
                     len(wifi_clients),
                     lte.rssi_dbm,
                     telemetry_q.count(),
@@ -312,25 +274,18 @@ def main(argv: list[str] | None = None) -> None:
                     module_status,
                 )
 
-            # Sleep to keep interval
-            dt = time.time() - t0
-            sleep_s = max(0.0, cfg.send.interval_s - dt)
-            time.sleep(sleep_s)
+            # The scheduler no longer waits for ADC, Wi-Fi commands, HTTP, or
+            # backlog replay. With sleep disabled this keeps packet creation at
+            # approximately send.interval_s.
+            time.sleep(max(0.0, min(current_send_interval_s, cfg.send.interval_s) - loop_duration_s))
     finally:
-        try:
-            gps.stop()
-        except Exception:
-            pass
-        try:
-            sender.close()
-        except Exception:
-            pass
-        try:
-            events_reader.stop()
-        except Exception:
-            pass
-        try:
-            events_sender.close()
-        except Exception:
-            pass
-
+        for worker in (telemetry_dispatcher, events_dispatcher):
+            worker.stop()
+        for worker in (telemetry_flusher, events_flusher):
+            worker.stop()
+        weight_sampler.stop()
+        wifi_monitor.stop()
+        gps.stop()
+        events_reader.stop()
+        telemetry_q.close()
+        events_q.close()

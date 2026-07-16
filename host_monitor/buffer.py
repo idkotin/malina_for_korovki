@@ -158,3 +158,6 @@ class SqliteQueue:
         except Exception:
             return None
 
+    def close(self) -> None:
+        self._conn.close()
+
