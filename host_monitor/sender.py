@@ -97,6 +97,43 @@ class Sender:
             payload = _sanitize_telemetry_payload(payload)
             self.send_one(payload)
 
+    def send_telemetry_batch(
+        self,
+        *,
+        device_id: str,
+        stream_id: str,
+        live_packet_id: int,
+        rows: list[tuple[int, str]],
+    ) -> list[int]:
+        batch_url = self._url.rstrip("/") + "/batch"
+        packets = []
+        for packet_id, payload_json in rows:
+            payload = _sanitize_telemetry_payload(json.loads(payload_json))
+            packets.append({"packet_id": int(packet_id), "payload": payload})
+        response = self._client.post(
+            batch_url,
+            json={
+                "protocol_version": 1,
+                "device_id": device_id,
+                "stream_id": stream_id,
+                "live_packet_id": int(live_packet_id),
+                "packets": packets,
+            },
+        )
+        response.raise_for_status()
+        body = response.json()
+        acked = body.get("acked_packet_ids")
+        if not isinstance(acked, list):
+            raise ValueError("batch response has no acked_packet_ids")
+        submitted = {int(packet_id) for packet_id, _ in rows}
+        normalized = []
+        for value in acked:
+            packet_id = int(value)
+            if packet_id not in submitted:
+                raise ValueError(f"server acknowledged unknown packet_id={packet_id}")
+            normalized.append(packet_id)
+        return normalized
+
     def send_json_string_batch(self, payload_json_list: list[str]) -> None:
         for s in payload_json_list:
             self.send_json_string_one(s)

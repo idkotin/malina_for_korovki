@@ -1,13 +1,13 @@
 device:
-  id: "ISRK_Hozain_rasp"
+  id: "Hozain_01"
 
 send:
-  url: "http://127.0.0.1:8000/telemetry"
-  interval_s: 0.5
-  timeout_s: 3.0
-  max_batch: 50
-  idle_sleep_enabled: true
-  idle_after_s: 900.0
+  url: "https://vi-korm.ru/api/telemetry/host"
+  interval_s: 2.0
+  timeout_s: 2.0
+  max_batch: 20
+  idle_sleep_enabled: false
+  idle_after_s: 1800.0
   idle_interval_s: 120.0
   movement_confirm_s: 5.0
   movement_speed_kmh: 2.0

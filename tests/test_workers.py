@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from host_monitor.buffer import SqliteQueue
 from host_monitor.models import Weight
-from host_monitor.workers import BufferFlusher, OutboundDispatcher, WeightSampler, WifiMonitor
+from host_monitor.workers import BufferFlusher, OutboundDispatcher, TelemetryOutboxWorker, WeightSampler, WifiMonitor
 from host_monitor.wifi_clients import _parse_active_ip_neigh
 
 
@@ -70,7 +70,71 @@ class _SlowSender:
         pass
 
 
+class _BatchSender:
+    calls: list[dict] = []
+
+    def __init__(self, url: str, timeout_s: float):
+        pass
+
+    def send_telemetry_batch(self, **kwargs) -> list[int]:
+        self.calls.append(kwargs)
+        return [row_id for row_id, _ in kwargs["rows"]]
+
+    def close(self) -> None:
+        pass
+
+
 class WorkerTests(unittest.TestCase):
+    def test_outbox_selects_live_packet_then_oldest_backlog(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue = SqliteQueue(
+                sqlite_path=str(Path(temp_dir) / "buffer.sqlite3"),
+                table="telemetry",
+                max_rows=100,
+            )
+            ids = [queue.put({"id": value}) for value in range(1, 6)]
+            selected = queue.peek_fresh_first(ids[-1], 3)
+            self.assertEqual([row_id for row_id, _ in selected], [ids[-1], ids[0], ids[1]])
+            first_stream = queue.get_or_create_stream_id()
+            queue.close()
+            reopened = SqliteQueue(
+                sqlite_path=str(Path(temp_dir) / "buffer.sqlite3"),
+                table="telemetry",
+                max_rows=100,
+            )
+            self.assertEqual(reopened.get_or_create_stream_id(), first_stream)
+            reopened.close()
+
+    def test_telemetry_worker_deletes_only_acknowledged_batch(self) -> None:
+        _BatchSender.calls = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            queue = SqliteQueue(
+                sqlite_path=str(Path(temp_dir) / "buffer.sqlite3"),
+                table="telemetry",
+                max_rows=100,
+            )
+            old_ids = [queue.put({"id": value}) for value in range(3)]
+            live_id = queue.put({"id": 99})
+            worker = TelemetryOutboxWorker(
+                device_id="Hozain_01",
+                url="https://example.invalid/api/telemetry/host",
+                timeout_s=0.1,
+                outbox=queue,
+                max_batch=3,
+                sender_factory=_BatchSender,
+            )
+            worker.start()
+            try:
+                worker.notify(live_id)
+                self.assertTrue(wait_until(lambda: len(_BatchSender.calls) >= 1))
+                self.assertTrue(wait_until(lambda: queue.count() == 1))
+            finally:
+                worker.stop()
+            sent_ids = [row_id for row_id, _ in _BatchSender.calls[-1]["rows"]]
+            self.assertEqual(sent_ids, [live_id, old_ids[0], old_ids[1]])
+            self.assertEqual([row_id for row_id, _ in queue.peek_batch(10)], [old_ids[2]])
+            queue.close()
+
     def test_wifi_fallback_excludes_stale_disconnected_neighbors(self) -> None:
         output = "\n".join([
             "192.168.4.2 dev wlan0 lladdr aa:bb:cc:dd:ee:01 REACHABLE",

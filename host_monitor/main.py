@@ -18,7 +18,7 @@ from host_monitor.weight_reader import WeightCfg as WeightCfgDC
 from host_monitor.weight_reader import WeightReader
 from host_monitor.wifi_clients import WifiCfg as WifiCfgDC
 from host_monitor.wifi_clients import get_wifi_clients
-from host_monitor.workers import BufferFlusher, OutboundDispatcher, WeightSampler, WifiMonitor
+from host_monitor.workers import BufferFlusher, OutboundDispatcher, TelemetryOutboxWorker, WeightSampler, WifiMonitor
 
 
 log = logging.getLogger("host_monitor")
@@ -102,13 +102,6 @@ def main(argv: list[str] | None = None) -> None:
     )
     events_reader.start()
 
-    telemetry_dispatcher = OutboundDispatcher(
-        url=cfg.send.url,
-        timeout_s=cfg.send.timeout_s,
-        sqlite_path=cfg.buffer.sqlite_path,
-        table="telemetry",
-        max_rows=cfg.buffer.max_rows,
-    )
     events_dispatcher = OutboundDispatcher(
         url=cfg.events.url,
         timeout_s=cfg.events.timeout_s,
@@ -116,14 +109,12 @@ def main(argv: list[str] | None = None) -> None:
         table="events",
         max_rows=cfg.buffer.max_rows_events,
     )
-    telemetry_flusher = BufferFlusher(
+    telemetry_sender = TelemetryOutboxWorker(
+        device_id=cfg.device.id,
         url=cfg.send.url,
         timeout_s=cfg.send.timeout_s,
-        sqlite_path=cfg.buffer.sqlite_path,
-        table="telemetry",
-        max_rows=cfg.buffer.max_rows,
+        outbox=telemetry_q,
         max_batch=cfg.send.max_batch,
-        telemetry=True,
     )
     events_flusher = BufferFlusher(
         url=cfg.events.url,
@@ -134,7 +125,7 @@ def main(argv: list[str] | None = None) -> None:
         max_batch=cfg.events.max_batch,
         telemetry=False,
     )
-    for worker in (telemetry_dispatcher, events_dispatcher, telemetry_flusher, events_flusher):
+    for worker in (telemetry_sender, events_dispatcher, events_flusher):
         worker.start()
 
     seq = 0
@@ -226,9 +217,8 @@ def main(argv: list[str] | None = None) -> None:
             current_send_interval_s = idle_interval_s if sleep_active else max(0.1, float(cfg.send.interval_s))
             should_send = last_telemetry_send <= 0.0 or now - last_telemetry_send >= current_send_interval_s * 0.95
             if should_send:
-                if not telemetry_dispatcher.submit(payload):
-                    telemetry_q.put(payload)
-                    log.warning("telemetry dispatcher full; payload buffered")
+                live_id = telemetry_q.put(payload)
+                telemetry_sender.notify(live_id)
                 last_telemetry_send = now
 
             for event in events_reader.drain(max_items=20):
@@ -250,9 +240,8 @@ def main(argv: list[str] | None = None) -> None:
                     "events_buffer_rows": events_q.count(),
                     "events_buffer_oldest_age_s": events_q.oldest_age_s(),
                     "events_reader": events_status,
-                    "telemetry_dispatcher": telemetry_dispatcher.status(),
+                    "telemetry_outbox_sender": telemetry_sender.status(),
                     "events_dispatcher": events_dispatcher.status(),
-                    "telemetry_flush": telemetry_flusher.status(),
                     "events_flush": events_flusher.status(),
                     "telemetry_send": {
                         "sleep_active": sleep_active,
@@ -279,9 +268,7 @@ def main(argv: list[str] | None = None) -> None:
             # approximately send.interval_s.
             time.sleep(max(0.0, min(current_send_interval_s, cfg.send.interval_s) - loop_duration_s))
     finally:
-        for worker in (telemetry_dispatcher, events_dispatcher):
-            worker.stop()
-        for worker in (telemetry_flusher, events_flusher):
+        for worker in (telemetry_sender, events_dispatcher, events_flusher):
             worker.stop()
         weight_sampler.stop()
         wifi_monitor.stop()

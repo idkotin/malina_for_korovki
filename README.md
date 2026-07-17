@@ -131,7 +131,8 @@ Important fields:
 
 - `send.url`: telemetry API URL
 - `events.url`: SMS/call events API URL
-- `send.interval_s`: telemetry period
+- `send.interval_s`: fresh telemetry creation and immediate send-attempt period
+- `send.max_batch`: maximum request size; a batch is never held waiting to become full
 - `send.idle_sleep_enabled`: slow down telemetry sending when the machine is stationary
 - `send.idle_after_s`: seconds without confirmed movement before slow sending starts
 - `send.idle_interval_s`: telemetry period while stationary sleep mode is active
@@ -168,9 +169,9 @@ weight:
   channel_neg: 1
 ```
 
-Stationary sleep mode only skips regular telemetry sends. GPS, weight, modem events and buffer flushing keep running on the normal loop, so short GPS speed spikes do not immediately wake the sender.
+Stationary sleep mode slows telemetry packet creation. GPS, weight, and modem events keep running normally. The production configuration keeps stationary sleep disabled.
 
-Weight sampling, Wi-Fi polling, HTTP sending, and SQLite backlog flushing run in separate background threads. A slow ADS1263 read or a large backlog therefore does not reduce the fresh telemetry scheduling rate. Failed Wi-Fi scans clear the previous client list instead of reusing stale connected devices.
+Every fresh packet is committed to the SQLite outbox before it wakes the single telemetry sender. With no backlog the request contains one row; with a backlog it contains the fresh row plus up to `send.max_batch - 1` oldest rows. Rows are deleted only when the server returns their `acked_packet_ids`. Weight sampling and Wi-Fi polling remain independent background tasks, so a slow ADS1263 read does not reduce the configured telemetry cadence.
 
 ## 4) Existing load-cell system integration
 

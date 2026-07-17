@@ -317,3 +317,11 @@ At minimum:
   trimming behavior.
 - If touching modem code, test on hardware or clearly state that hardware
   validation was not possible.
+
+## Durable telemetry outbox (2026-07-17)
+
+- `send.interval_s` controls fresh packet creation and the immediate send attempt. A request never waits for `send.max_batch` rows.
+- Every telemetry packet is committed to the existing SQLite queue with `synchronous=FULL`; its row ID is the persistent `packet_id`, and `queue_metadata` stores one durable `stream_id`.
+- `TelemetryOutboxWorker` is the only telemetry HTTP sender. It sends the fresh row first plus the oldest backlog rows, up to 20 by default, and deletes only server-confirmed `acked_packet_ids`.
+- The modem events dispatcher/flusher remains separate. Existing telemetry rows require no data rewrite and receive the same stream identity after upgrade.
+- Local checks: compile succeeds and 11 unit tests pass with the bundled Python runtime. Hardware/systemd validation must still be performed on the Raspberry Pi.

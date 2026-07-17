@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -202,6 +203,134 @@ class OutboundDispatcher:
     def status(self) -> dict[str, Any]:
         with self._lock:
             return {"pending": self._pending.qsize(), "last_error": self._last_error}
+
+
+class TelemetryOutboxWorker:
+    """Persist-first, fresh-priority telemetry batch sender.
+
+    One notification produces at most one HTTP request. This ties healthy
+    network cadence to send.interval_s and prevents a large backlog from
+    turning into an unbounded request flood.
+    """
+
+    def __init__(
+        self,
+        *,
+        device_id: str,
+        url: str,
+        timeout_s: float,
+        outbox: SqliteQueue,
+        max_batch: int,
+        sender_factory: Callable[[str, float], Sender] = Sender,
+    ):
+        self._device_id = device_id
+        self._url = url
+        self._timeout_s = timeout_s
+        self._outbox = outbox
+        self._max_batch = max(1, min(50, int(max_batch)))
+        self._sender_factory = sender_factory
+        self._stream_id = outbox.get_or_create_stream_id()
+        self._stop = threading.Event()
+        self._wake = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._latest_live_id: int | None = None
+        self._backoff_s = 1.0
+        self._last_error: str | None = None
+        self._last_latency_s: float | None = None
+        self._sent = 0
+
+    def start(self) -> None:
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="telemetry-outbox", daemon=True)
+        self._thread.start()
+        # Recover an existing outbox even before the first new sample arrives.
+        self._wake.set()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._wake.set()
+        if self._thread:
+            self._thread.join(timeout=max(3.0, self._timeout_s + 1.0))
+
+    def notify(self, live_id: int) -> None:
+        with self._lock:
+            self._latest_live_id = int(live_id)
+        self._wake.set()
+
+    def _run(self) -> None:
+        sender = self._sender_factory(self._url, self._timeout_s)
+        try:
+            while not self._stop.is_set():
+                self._wake.wait(timeout=1.0)
+                if self._stop.is_set():
+                    break
+                if not self._wake.is_set():
+                    continue
+                self._wake.clear()
+                with self._lock:
+                    live_id = self._latest_live_id
+                rows = self._outbox.peek_fresh_first(live_id, self._max_batch)
+                if not rows:
+                    self._set_status(backoff_s=1.0, error=None, latency_s=None)
+                    continue
+                actual_live_id = rows[0][0]
+                started = time.monotonic()
+                try:
+                    acked_ids = sender.send_telemetry_batch(
+                        device_id=self._device_id,
+                        stream_id=self._stream_id,
+                        live_packet_id=actual_live_id,
+                        rows=rows,
+                    )
+                    self._outbox.delete_ids(acked_ids)
+                    latency_s = time.monotonic() - started
+                    with self._lock:
+                        self._sent += len(acked_ids)
+                    self._set_status(backoff_s=1.0, error=None, latency_s=latency_s)
+                    log.info(
+                        "telemetry batch accepted stream=%s live_id=%s rows=%s acked=%s latency_s=%.3f remaining=%s",
+                        self._stream_id,
+                        actual_live_id,
+                        len(rows),
+                        len(acked_ids),
+                        latency_s,
+                        self._outbox.count(),
+                    )
+                except Exception as exc:
+                    delay = self._backoff_s
+                    next_delay = min(60.0, delay * 2.0)
+                    self._set_status(backoff_s=next_delay, error=str(exc), latency_s=time.monotonic() - started)
+                    log.warning(
+                        "telemetry batch failed stream=%s live_id=%s rows=%s retry_in_s=%.1f error=%s",
+                        self._stream_id,
+                        actual_live_id,
+                        len(rows),
+                        delay,
+                        exc,
+                    )
+                    if self._stop.wait(delay * random.uniform(0.8, 1.2)):
+                        break
+                    self._wake.set()
+        finally:
+            sender.close()
+
+    def _set_status(self, *, backoff_s: float, error: str | None, latency_s: float | None) -> None:
+        with self._lock:
+            self._backoff_s = backoff_s
+            self._last_error = error
+            self._last_latency_s = latency_s
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            return {
+                "stream_id": self._stream_id,
+                "latest_live_id": self._latest_live_id,
+                "backoff_s": self._backoff_s,
+                "last_error": self._last_error,
+                "last_latency_s": self._last_latency_s,
+                "sent": self._sent,
+            }
 
 
 class BufferFlusher:
