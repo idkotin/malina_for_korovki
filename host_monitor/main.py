@@ -72,6 +72,7 @@ def main(argv: list[str] | None = None) -> None:
             port_candidates=cfg.gps.port_candidates,
             baud=cfg.gps.baud,
             baud_candidates=cfg.gps.baud_candidates,
+            max_fix_age_s=cfg.gps.max_fix_age_s,
         )
     )
     gps.start()
@@ -149,10 +150,6 @@ def main(argv: list[str] | None = None) -> None:
             loop_started = time.monotonic()
             seq += 1
 
-            pos = gps.latest()
-            weight = weight_sampler.latest()
-            wifi_clients, wifi_err = wifi_monitor.latest()
-
             if cfg.lte.events_enabled:
                 lte = LteInfo()
                 snap = events_reader.lte_snapshot()
@@ -165,6 +162,11 @@ def main(argv: list[str] | None = None) -> None:
                     LteCfgDC(enabled=cfg.lte.enabled, mmcli=cfg.lte.mmcli, at_ports=cfg.lte.at_ports, at_baud=cfg.lte.at_baud)
                 )
 
+            # Take the current device snapshot only after potentially slow LTE
+            # work.  The builder immediately timestamps this GPS/weight pair.
+            pos = gps.latest()
+            weight = weight_sampler.latest()
+            wifi_clients, wifi_err = wifi_monitor.latest()
             coordinates_in_range = (
                 pos.lat is not None
                 and pos.lon is not None
@@ -173,7 +175,12 @@ def main(argv: list[str] | None = None) -> None:
             )
             if pos.lat is not None and pos.lon is not None and not coordinates_in_range:
                 log.warning("invalid GPS coordinates ignored: lat=%s lon=%s", pos.lat, pos.lon)
-            gps_valid = coordinates_in_range and (pos.quality or 0) > 0
+            gps_valid = (
+                coordinates_in_range
+                and (pos.quality or 0) > 0
+                and pos.age_s is not None
+                and pos.age_s <= max(0.1, float(cfg.gps.max_fix_age_s))
+            )
             events_status = events_reader.status()
             events_reader_ok = (not cfg.lte.events_enabled) or (
                 bool(events_status.get("running")) and not events_status.get("last_error")

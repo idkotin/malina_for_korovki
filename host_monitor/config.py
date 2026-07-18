@@ -46,6 +46,7 @@ class GpsCfg(BaseModel):
     port_candidates: list[str] = Field(default_factory=lambda: ["/dev/ttyUSB1", "/dev/ttyUSB3", "/dev/ttyUSB0", "/dev/ttyUSB2"])
     baud: int | None = None
     baud_candidates: list[int] = Field(default_factory=lambda: [9600, 19200, 38400, 57600, 115200])
+    max_fix_age_s: float = 3.0
 
 
 class WeightCfg(BaseModel):

@@ -31,6 +31,8 @@ gps:
   # For SIM7600 GPS this is often 115200.
   baud: 115200
   baud_candidates: [9600, 19200, 38400, 57600, 115200]
+  # Stop reporting an old position as valid after serial/GNSS stalls.
+  max_fix_age_s: 3.0
 
 weight:
   enabled: false

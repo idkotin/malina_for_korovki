@@ -11,6 +11,8 @@ class Position(BaseModel):
     quality: int | None = None  # 0=no fix, 1=GPS fix, 2=DGPS...
     satellites: int | None = None
     speed_kmh: float | None = None
+    age_s: float | None = None
+    source_utc_s: float | None = None
 
 
 class Weight(BaseModel):
@@ -34,6 +36,7 @@ class Telemetry(BaseModel):
     lon: float = 0.0
     gps_valid: bool = False
     gps_satellites: int = 0
+    gps_age_s: float = 0.0
     speed_kmh: float = 0.0
     weight: float = 0.0
     raw: float = 0.0

@@ -22,17 +22,20 @@ def build_telemetry(
     weight_valid: bool,
     events_reader_ok: bool,
 ) -> Telemetry:
+    # This is the device's single packet-capture moment.  GPS time is never
+    # used here: a bad GPS clock must not reorder the durable telemetry stream.
     coordinates_valid = (
         position.lat is not None
         and position.lon is not None
         and -90.0 <= position.lat <= 90.0
         and -180.0 <= position.lon <= 180.0
     )
-    lat = position.lat if coordinates_valid else 0.0
-    lon = position.lon if coordinates_valid else 0.0
     gps_valid = gps_valid and coordinates_valid
+    lat = position.lat if gps_valid else 0.0
+    lon = position.lon if gps_valid else 0.0
     gps_quality = position.quality if position.quality is not None else 0
     gps_satellites = position.satellites if position.satellites is not None else 0
+    gps_age_s = position.age_s if position.age_s is not None else 0.0
     speed_kmh = position.speed_kmh if gps_valid and position.speed_kmh is not None else 0.0
     weight_kg = weight.weight if weight.weight is not None else 0.0
     raw_weight_kg = weight.raw if weight.raw is not None else 0.0
@@ -47,6 +50,7 @@ def build_telemetry(
         lon=lon,
         gps_valid=gps_valid,
         gps_satellites=gps_satellites,
+        gps_age_s=gps_age_s,
         speed_kmh=speed_kmh,
         weight=weight_kg,
         raw=raw_weight_kg,
