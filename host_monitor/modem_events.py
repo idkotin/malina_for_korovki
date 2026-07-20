@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,9 @@ class ModemEventsCfg:
     candidate_ports: list[str]
     baud: int
     sms_poll_interval_s: float = 30.0
+    sms_reboot_enabled: bool = False
+    sms_reboot_allowed_number: str | None = None
+    sms_reboot_command: str = "/reboot"
 
 
 @dataclass(frozen=True)
@@ -285,6 +289,17 @@ CLIP_RE = re.compile(r'^\+CLIP:\s*\"?([^\",]+)')
 HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
 
+def normalize_sms_number(value: str | None) -> str:
+    """Normalize Russian mobile numbers for an exact allow-list comparison."""
+
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("8"):
+        digits = "7" + digits[1:]
+    elif len(digits) == 10:
+        digits = "7" + digits
+    return digits
+
+
 class ModemEventsReader:
     """
     Reads SMS/call events from a SIM7600-like modem AT port.
@@ -294,8 +309,9 @@ class ModemEventsReader:
     - {"type":"call","timestamp":...,"from":...,"text":""}
     """
 
-    def __init__(self, cfg: ModemEventsCfg):
+    def __init__(self, cfg: ModemEventsCfg, *, reboot_action: Callable[[], None] | None = None):
         self._cfg = cfg
+        self._reboot_action = reboot_action
         self._q: queue.SimpleQueue[dict] = queue.SimpleQueue()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -305,6 +321,8 @@ class ModemEventsReader:
         self._pending_call_ts: float | None = None
         self._pending_sms_parts: dict[tuple[str, str, int], dict[int, DecodedSms]] = defaultdict(dict)
         self._pending_sms_seen_ts: dict[tuple[str, str, int], float] = {}
+        self._reboot_lock = threading.Lock()
+        self._reboot_requested = False
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -335,6 +353,40 @@ class ModemEventsReader:
 
     def lte_snapshot(self) -> dict:
         return dict(self._lte_snapshot)
+
+    def _is_authorized_reboot_sms(self, event: dict) -> bool:
+        if not self._cfg.sms_reboot_enabled or event.get("type") != "sms":
+            return False
+        allowed = normalize_sms_number(self._cfg.sms_reboot_allowed_number)
+        sender = normalize_sms_number(str(event.get("from") or ""))
+        if not allowed or sender != allowed:
+            return False
+        expected = str(self._cfg.sms_reboot_command or "/reboot")
+        return str(event.get("text") or "").strip() == expected
+
+    def _dispatch_event(self, event: dict) -> None:
+        if not self._is_authorized_reboot_sms(event):
+            self._q.put(event)
+            return
+
+        with self._reboot_lock:
+            if self._reboot_requested:
+                log.warning("duplicate authorized SMS reboot command ignored")
+                return
+            if self._reboot_action is None:
+                log.error("authorized SMS reboot command received, but reboot action is unavailable")
+                self._q.put(event)
+                return
+            self._reboot_requested = True
+
+        log.critical("authorized SMS reboot command received; requesting clean system reboot")
+        try:
+            self._reboot_action()
+        except Exception:
+            with self._reboot_lock:
+                self._reboot_requested = False
+            log.exception("failed to request system reboot from authorized SMS")
+            self._q.put(event)
 
     def _cleanup_old_pending_sms(self, max_age_s: float = 1800.0) -> None:
         now = time.time()
@@ -526,7 +578,7 @@ class ModemEventsReader:
                                 sms_events = self._poll_unread_sms(ser)
                                 for ev in sms_events:
                                     log.info("SMS polled: from=%s text_len=%s", ev.get("from"), len(ev.get("text", "")))
-                                    self._q.put(ev)
+                                    self._dispatch_event(ev)
                             except Exception as e:
                                 self._last_err = str(e)
                                 log.warning("SMS poll error: %s", e)
@@ -534,7 +586,7 @@ class ModemEventsReader:
 
                         # If we saw RING but never got CLIP, send a fallback call event.
                         if self._pending_call_ts is not None and (now - self._pending_call_ts) >= 12.0:
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
+                            self._dispatch_event({"type": "call", "timestamp": utc_now_iso(), "from": "", "text": ""})
                             self._pending_call_ts = None
 
                         raw = ser.readline()
@@ -552,7 +604,7 @@ class ModemEventsReader:
                                 log.info("CMTI indication: idx=%s", idx)
                                 sms = self._read_sms_by_index(ser, idx)
                                 if sms:
-                                    self._q.put(sms)
+                                    self._dispatch_event(sms)
                             except Exception as e:
                                 self._last_err = str(e)
                                 log.warning("sms read error: %s", e)
@@ -566,7 +618,7 @@ class ModemEventsReader:
                                 sms_events = self._poll_unread_sms(ser)
                                 for ev in sms_events:
                                     log.info("SMS polled after FULL: from=%s text_len=%s", ev.get("from"), len(ev.get("text", "")))
-                                    self._q.put(ev)
+                                    self._dispatch_event(ev)
                             except Exception as e:
                                 self._last_err = str(e)
                                 log.warning("SMS FULL recovery poll error: %s", e)
@@ -590,7 +642,7 @@ class ModemEventsReader:
                         if m2:
                             from_num = m2.group(1).strip()
                             log.info("CALL URC: CLIP from=%s", from_num)
-                            self._q.put({"type": "call", "timestamp": utc_now_iso(), "from": from_num, "text": ""})
+                            self._dispatch_event({"type": "call", "timestamp": utc_now_iso(), "from": from_num, "text": ""})
                             self._pending_call_ts = None
                             continue
             except Exception as e:

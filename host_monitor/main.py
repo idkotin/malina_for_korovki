@@ -12,6 +12,7 @@ from host_monitor.lte_info import LteCfg as LteCfgDC
 from host_monitor.lte_info import get_lte_info
 from host_monitor.models import LteInfo
 from host_monitor.modem_events import ModemEventsCfg, ModemEventsReader
+from host_monitor.system_actions import request_system_reboot
 from host_monitor.system_info import read_cpu_temp_c
 from host_monitor.telemetry_builder import build_telemetry
 from host_monitor.weight_reader import WeightCfg as WeightCfgDC
@@ -99,7 +100,11 @@ def main(argv: list[str] | None = None) -> None:
             candidate_ports=cfg.lte.at_ports,
             baud=cfg.lte.at_baud,
             sms_poll_interval_s=cfg.lte.sms_poll_interval_s,
-        )
+            sms_reboot_enabled=cfg.sms_reboot.enabled,
+            sms_reboot_allowed_number=cfg.sms_reboot.allowed_number,
+            sms_reboot_command=cfg.sms_reboot.command,
+        ),
+        reboot_action=request_system_reboot,
     )
     events_reader.start()
 

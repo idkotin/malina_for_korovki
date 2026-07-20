@@ -88,6 +88,13 @@ lte:
   # Fixed AT port for SMS/call events. If null, we auto-detect from at_ports.
   events_port: null
 
+# Manual reboot is intentionally disabled in the public repository config.
+# Put the authorized phone number only into the live config on the Raspberry Pi.
+sms_reboot:
+  enabled: false
+  allowed_number: null
+  command: "/reboot"
+
 logging:
   dir: "./logs"
   file: "host_monitor.log"

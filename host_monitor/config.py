@@ -106,6 +106,14 @@ class LteCfg(BaseModel):
     sms_poll_interval_s: float = 30.0
 
 
+class SmsRebootCfg(BaseModel):
+    """Manual reboot command received through the modem SMS reader."""
+
+    enabled: bool = False
+    allowed_number: str | None = None
+    command: str = "/reboot"
+
+
 class LoggingCfg(BaseModel):
     dir: str = "./logs"
     file: str = "host_monitor.log"
@@ -123,6 +131,7 @@ class AppCfg(BaseModel):
     weight: WeightCfg = Field(default_factory=WeightCfg)
     wifi: WifiCfg = Field(default_factory=WifiCfg)
     lte: LteCfg = Field(default_factory=LteCfg)
+    sms_reboot: SmsRebootCfg = Field(default_factory=SmsRebootCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
 
 
