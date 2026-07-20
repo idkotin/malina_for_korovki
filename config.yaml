@@ -95,6 +95,18 @@ sms_reboot:
   allowed_number: null
   command: "/reboot"
 
+# Automatic recovery is disabled in the public config. Production may enable
+# it only with the physical terminal-off guard based on the unfiltered weight.
+auto_reboot:
+  enabled: false
+  telemetry_inactive_s: 900.0
+  terminal_off_below_raw_kg: -1000.0
+  terminal_off_confirm_s: 30.0
+  max_weight_age_s: 10.0
+  healthy_success_max_age_s: 10.0
+  healthy_reset_confirm_s: 60.0
+  state_path: "./data/auto_reboot_state.json"
+
 logging:
   dir: "./logs"
   file: "host_monitor.log"

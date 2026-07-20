@@ -114,6 +114,19 @@ class SmsRebootCfg(BaseModel):
     command: str = "/reboot"
 
 
+class AutoRebootCfg(BaseModel):
+    """Guarded recovery for a sustained loss of acknowledged telemetry."""
+
+    enabled: bool = False
+    telemetry_inactive_s: float = 900.0
+    terminal_off_below_raw_kg: float = -1000.0
+    terminal_off_confirm_s: float = 30.0
+    max_weight_age_s: float = 10.0
+    healthy_success_max_age_s: float = 10.0
+    healthy_reset_confirm_s: float = 60.0
+    state_path: str = "./data/auto_reboot_state.json"
+
+
 class LoggingCfg(BaseModel):
     dir: str = "./logs"
     file: str = "host_monitor.log"
@@ -132,6 +145,7 @@ class AppCfg(BaseModel):
     wifi: WifiCfg = Field(default_factory=WifiCfg)
     lte: LteCfg = Field(default_factory=LteCfg)
     sms_reboot: SmsRebootCfg = Field(default_factory=SmsRebootCfg)
+    auto_reboot: AutoRebootCfg = Field(default_factory=AutoRebootCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
 
 
@@ -160,4 +174,5 @@ def ensure_dirs(cfg: AppCfg) -> None:
     Path(cfg.logging.dir).mkdir(parents=True, exist_ok=True)
     Path(cfg.buffer.sqlite_path).parent.mkdir(parents=True, exist_ok=True)
     Path(cfg.weight.calibration_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(cfg.auto_reboot.state_path).parent.mkdir(parents=True, exist_ok=True)
 

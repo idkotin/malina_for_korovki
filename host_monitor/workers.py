@@ -238,6 +238,7 @@ class TelemetryOutboxWorker:
         self._backoff_s = 1.0
         self._last_error: str | None = None
         self._last_latency_s: float | None = None
+        self._last_success_monotonic: float | None = None
         self._sent = 0
 
     def start(self) -> None:
@@ -287,6 +288,8 @@ class TelemetryOutboxWorker:
                     latency_s = time.monotonic() - started
                     with self._lock:
                         self._sent += len(acked_ids)
+                        if acked_ids:
+                            self._last_success_monotonic = time.monotonic()
                     self._set_status(backoff_s=1.0, error=None, latency_s=latency_s)
                     log.info(
                         "telemetry batch accepted stream=%s live_id=%s rows=%s acked=%s latency_s=%.3f remaining=%s",
@@ -323,12 +326,18 @@ class TelemetryOutboxWorker:
 
     def status(self) -> dict[str, Any]:
         with self._lock:
+            last_success_age_s = (
+                None
+                if self._last_success_monotonic is None
+                else max(0.0, time.monotonic() - self._last_success_monotonic)
+            )
             return {
                 "stream_id": self._stream_id,
                 "latest_live_id": self._latest_live_id,
                 "backoff_s": self._backoff_s,
                 "last_error": self._last_error,
                 "last_latency_s": self._last_latency_s,
+                "last_success_age_s": last_success_age_s,
                 "sent": self._sent,
             }
 

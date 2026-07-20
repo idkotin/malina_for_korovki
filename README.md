@@ -22,6 +22,7 @@ Current telemetry payload:
   "lon": 82.812417,
   "gps_valid": true,
   "gps_satellites": 12,
+  "gps_age_s": 0.2,
   "speed_kmh": 18.52,
   "weight": 1234.56,
   "raw": 1236.78,
@@ -38,6 +39,7 @@ Current telemetry payload:
 Field meaning for health flags:
 
 - `gps_valid`: `true` when current GPS coordinates come from a valid fix
+- `gps_age_s`: age of the latest fix at packet capture time, including the UTC epoch carried by NMEA
 - `speed_kmh`: GPS speed over ground in km/h, parsed from NMEA RMC; `0.0` when there is no valid fix
 - `weight`: filtered weight in kg after median/EMA smoothing
 - `raw`: calibrated weight in kg before median/EMA smoothing; useful for diagnostics and backend-side filtering
@@ -142,6 +144,7 @@ Important fields:
 - `wifi.max_snapshot_age_s`: maximum client snapshot age; older snapshots are reported as empty
 - `gps.port`: fixed GPS serial port (`null` for auto-detect)
 - `gps.port_candidates`: candidate GPS ports
+- `gps.max_fix_age_s`: maximum fix age; older coordinates are sent as invalid instead of being reused
 - `lte.at_ports`: candidate AT ports
 - `weight.enabled`: enable or disable weight reading
 - `weight.simulate`: use a fake weight value instead of the ADC
@@ -156,6 +159,7 @@ Important fields:
 Telemetry health flags:
 
 - `gps_valid`: whether the current GPS fix is valid
+- `gps_age_s`: age of that fix in seconds when the packet was created
 - `weight_valid`: whether the current weight sample is valid
 - `events_reader_ok`: whether the modem events reader is currently healthy
 
@@ -443,8 +447,8 @@ sqlite3 ./data/buffer.sqlite3 "select queue_id, queued_created_utc, failed_utc, 
 ```
 
 Coordinates outside the valid latitude/longitude ranges are sent as `0, 0` with
-`gps_valid: false`. This also repairs older buffered packets with corrupted GPS
-coordinates before they are resent.
+`gps_valid: false`. This sanitizes out-of-range buffered coordinates before
+resend; it cannot reconstruct a real position that the device never recorded.
 
 Clear only buffered telemetry rows:
 
@@ -543,3 +547,43 @@ weight:
 ```
 
 The service will still run normally. The telemetry packet will keep sending `weight: 0.0` and `weight_valid: false`.
+
+## 12) Manual and guarded automatic reboot
+
+Manual SMS reboot is disabled in the public config. In the live Raspberry Pi
+config it can be restricted to one phone number and the exact `/reboot`
+command:
+
+```yaml
+sms_reboot:
+  enabled: true
+  allowed_number: "+7XXXXXXXXXX"
+  command: "/reboot"
+```
+
+Guarded automatic recovery is also disabled by default:
+
+```yaml
+auto_reboot:
+  enabled: true
+  telemetry_inactive_s: 900.0
+  terminal_off_below_raw_kg: -1000.0
+  terminal_off_confirm_s: 30.0
+  max_weight_age_s: 10.0
+  healthy_success_max_age_s: 10.0
+  healthy_reset_confirm_s: 60.0
+  state_path: "./data/auto_reboot_state.json"
+```
+
+Automatic reboot requires both 15 minutes without a server-acknowledged host
+batch and a fresh unfiltered `raw` weight strictly below -1000 kg for 30
+seconds. A missing/stale weight, `raw == -1000`, or a healthy ACK stream blocks
+reboot. The raw value is intentional: normal telemetry rejects such a weight as
+invalid, but the hardware installation uses it as the factory-terminal-off
+signal.
+
+The watchdog persists a latch before reboot. It cannot reboot again while the
+same outage continues; the latch clears only after ACKs remain fresh for 60
+seconds. The watchdog runs inside `host-monitor`, so a frozen process cannot
+reboot using an old terminal state. Detailed incident evidence and the PPP
+warning are in [`INCIDENT_2026-07-19_20.md`](./INCIDENT_2026-07-19_20.md).

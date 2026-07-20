@@ -95,7 +95,7 @@ Current fields:
 - `device_id`
 - `timestamp`
 - `lat`, `lon`
-- `gps_valid`, `gps_satellites`, `gps_quality`
+- `gps_valid`, `gps_satellites`, `gps_quality`, `gps_age_s`
 - `speed_kmh`
 - `weight`
 - `raw`
@@ -227,6 +227,15 @@ NMEA. It parses:
 The thread keeps the newest parsed position and merges supplemental fields from
 different sentence types.
 
+GPS fixes are aged with `time.monotonic()`. A fix older than
+`gps.max_fix_age_s` is emitted with `gps_valid=false` and zero coordinates;
+serial failures immediately discard the previous fix. NMEA checksums are
+validated when present, and serial auto-detection accepts only parseable
+GGA/RMC/GNS sentences. GGA/GNS time-of-day and RMC date/time are also compared
+with the NTP-synchronized system clock. An old NMEA epoch invalidates the fix
+and clears the serial input buffer, so a tty backlog cannot masquerade as a
+fresh coordinate. RMC speed expires independently when RMC updates stop.
+
 ## Weight
 
 `host_monitor/weight_reader.py` supports ADS1263 and simulation.
@@ -324,4 +333,45 @@ At minimum:
 - Every telemetry packet is committed to the existing SQLite queue with `synchronous=FULL`; its row ID is the persistent `packet_id`, and `queue_metadata` stores one durable `stream_id`.
 - `TelemetryOutboxWorker` is the only telemetry HTTP sender. It sends the fresh row first plus the oldest backlog rows, up to 20 by default, and deletes only server-confirmed `acked_packet_ids`.
 - The modem events dispatcher/flusher remains separate. Existing telemetry rows require no data rewrite and receive the same stream identity after upgrade.
-- Local checks: compile succeeds and 11 unit tests pass with the bundled Python runtime. Hardware/systemd validation must still be performed on the Raspberry Pi.
+- Local checks: compile and the full unittest suite must pass with the bundled
+  Python runtime. Hardware/systemd validation must still be performed on the
+  Raspberry Pi.
+
+## SIM7600 incident and guarded recovery (2026-07-19/20)
+
+Read `INCIDENT_2026-07-19_20.md` before changing GPS, PPP, buffering, remote
+access, reboot logic or production replay behavior.
+
+- The confirmed 07:34 outage removed the complete SIM7600 USB composite device
+  and all `ttyUSB` ports. It was not caused by the GPS parser, server SQLite,
+  Amnezia or the durable outbox.
+- About 42,000 locally buffered packets were accepted after restart. The second
+  abrupt outage occurred after the local buffer had drained, so replay traffic
+  was not the trigger.
+- `lte.service` with `pppd call megafon` is the only production PPP owner. The
+  obsolete `sim7600-ppp.service` is disabled. Never call its generic `poff`
+  stop action: it SIGHUPs the working PPP session too.
+- A production server replay from 14:49:32 to 14:52:44 made the website appear
+  stale while the Pi received HTTP 202 every two seconds. Do not infer device
+  inactivity from the current map; use host ACK age.
+- Manual `/reboot` SMS is allow-listed by the live config only.
+- Optional automatic reboot requires both 900 seconds without an acknowledged
+  telemetry batch and a fresh `Weight.raw < -1000 kg` for 30 seconds. Missing
+  or stale weight blocks reboot. A persistent latch prevents a reboot loop and
+  clears only after 60 seconds of sustained ACK recovery.
+- The auto-reboot policy must stay in the host process. Moving it to an external
+  watcher that uses a stale last-known weight could reboot while the factory
+  terminal is currently on, which is explicitly forbidden.
+
+Implementation map:
+
+- `TelemetryOutboxWorker.status().last_success_age_s` is the only inactivity
+  clock. Website visibility, Amnezia reachability and server replay state are
+  not reboot signals.
+- `RecoveryWatchdog` in `host_monitor/recovery_watchdog.py` applies the two
+  guards and persists its latch before calling `request_system_reboot()`.
+- `main.py` passes `Weight.raw` plus the sampler age. Never replace it with the
+  filtered `Weight.weight`, because values below the validity threshold become
+  `None` there.
+- Public `config.yaml` keeps both SMS and automatic reboot disabled. Phone
+  numbers and production enablement belong only in the live Pi config.

@@ -12,6 +12,7 @@ from host_monitor.lte_info import LteCfg as LteCfgDC
 from host_monitor.lte_info import get_lte_info
 from host_monitor.models import LteInfo
 from host_monitor.modem_events import ModemEventsCfg, ModemEventsReader
+from host_monitor.recovery_watchdog import RecoveryWatchdog, RecoveryWatchdogCfg
 from host_monitor.system_actions import request_system_reboot
 from host_monitor.system_info import read_cpu_temp_c
 from host_monitor.telemetry_builder import build_telemetry
@@ -107,6 +108,20 @@ def main(argv: list[str] | None = None) -> None:
         reboot_action=request_system_reboot,
     )
     events_reader.start()
+
+    recovery_watchdog = RecoveryWatchdog(
+        RecoveryWatchdogCfg(
+            enabled=cfg.auto_reboot.enabled,
+            telemetry_inactive_s=cfg.auto_reboot.telemetry_inactive_s,
+            terminal_off_below_raw_kg=cfg.auto_reboot.terminal_off_below_raw_kg,
+            terminal_off_confirm_s=cfg.auto_reboot.terminal_off_confirm_s,
+            max_weight_age_s=cfg.auto_reboot.max_weight_age_s,
+            healthy_success_max_age_s=cfg.auto_reboot.healthy_success_max_age_s,
+            healthy_reset_confirm_s=cfg.auto_reboot.healthy_reset_confirm_s,
+            state_path=cfg.auto_reboot.state_path,
+        ),
+        reboot_action=request_system_reboot,
+    )
 
     events_dispatcher = OutboundDispatcher(
         url=cfg.events.url,
@@ -239,12 +254,20 @@ def main(argv: list[str] | None = None) -> None:
                     events_q.put(event_payload)
                     log.warning("events dispatcher full; event buffered")
 
+            weight_status = weight_sampler.status()
+            telemetry_sender_status = telemetry_sender.status()
+            recovery_status = recovery_watchdog.observe(
+                telemetry_last_success_age_s=telemetry_sender_status.get("last_success_age_s"),
+                raw_weight_kg=weight.raw,
+                weight_age_s=weight_status.get("age_s"),
+            )
+
             loop_duration_s = time.monotonic() - loop_started
             if now - last_log >= 10.0:
                 last_log = now
                 module_status = {
                     "gps": gps.status(),
-                    "weight": weight_sampler.status(),
+                    "weight": weight_status,
                     "wifi": wifi_monitor.status(),
                     "wifi_scan_error": wifi_err,
                     "telemetry_buffer_rows": telemetry_q.count(),
@@ -252,7 +275,8 @@ def main(argv: list[str] | None = None) -> None:
                     "events_buffer_rows": events_q.count(),
                     "events_buffer_oldest_age_s": events_q.oldest_age_s(),
                     "events_reader": events_status,
-                    "telemetry_outbox_sender": telemetry_sender.status(),
+                    "telemetry_outbox_sender": telemetry_sender_status,
+                    "auto_reboot": recovery_status,
                     "events_dispatcher": events_dispatcher.status(),
                     "events_flush": events_flusher.status(),
                     "telemetry_send": {

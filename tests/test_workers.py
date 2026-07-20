@@ -128,6 +128,7 @@ class WorkerTests(unittest.TestCase):
                 worker.notify(live_id)
                 self.assertTrue(wait_until(lambda: len(_BatchSender.calls) >= 1))
                 self.assertTrue(wait_until(lambda: queue.count() == 1))
+                self.assertIsNotNone(worker.status()["last_success_age_s"])
             finally:
                 worker.stop()
             sent_ids = [row_id for row_id, _ in _BatchSender.calls[-1]["rows"]]
