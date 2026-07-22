@@ -247,6 +247,17 @@ journalctl -u host-monitor -f
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
+Тот же AT-reader раз в 30 секунд опрашивает температуру и напряжение
+самого SIM7600. Посмотреть только эти строки:
+
+```bash
+sudo journalctl -u host-monitor.service -f -o short-iso | grep --line-buffered 'modem health:'
+```
+
+Нельзя параллельно открывать AT-порт через `minicom`, `screen` или второй
+Python-процесс. Второй reader может смешать AT-ответы и забрать SMS URC
+у `host-monitor`.
+
 ## 8) Удаленный доступ
 
 Файлы для удаленного доступа лежат в [`remote_access/amnezia`](./remote_access/amnezia). Не коммить реальные IP, пароли, приватные ключи, экспортированные `.conf` из Amnezia и локальные `known_hosts`. В `.gitignore` уже добавлены правила для типовых секретов в этой папке.

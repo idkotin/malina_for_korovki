@@ -113,6 +113,31 @@ def _at_ping_ok(ser: serial.Serial, timeout_s: float = 1.5) -> bool:
             return False
 
 
+def _parse_modem_temperature_c(lines: list[str]) -> float | None:
+    """Parse SIM7600 AT+CPMUTEMP without assuming a firmware suffix."""
+
+    for line in lines:
+        match = re.search(r"\+CPMUTEMP:\s*(-?\d+(?:\.\d+)?)", line, flags=re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+    return None
+
+
+def _parse_modem_voltage_v(lines: list[str]) -> float | None:
+    """Parse SIM7600 AT+CBC responses such as '+CBC: 3.591V'."""
+
+    for line in lines:
+        match = re.search(r"\+CBC:\s*(\d+(?:\.\d+)?)\s*(MV|V)?", line, flags=re.IGNORECASE)
+        if not match:
+            continue
+        value = float(match.group(1))
+        unit = (match.group(2) or "V").upper()
+        if unit == "MV" or value > 100.0:
+            value /= 1000.0
+        return value
+    return None
+
+
 def decode_maybe_ucs2(text: str) -> str:
     """
     Some operators send UCS2/UTF-16-BE as HEX string.
@@ -317,7 +342,13 @@ class ModemEventsReader:
         self._thread: threading.Thread | None = None
         self._status: dict = {"enabled": cfg.enabled, "running": False}
         self._last_err: str | None = None
-        self._lte_snapshot: dict = {"rssi_dbm": None, "access_tech": None, "ts": None}
+        self._lte_snapshot: dict = {
+            "rssi_dbm": None,
+            "access_tech": None,
+            "module_temp_c": None,
+            "module_voltage_v": None,
+            "ts": None,
+        }
         self._pending_call_ts: float | None = None
         self._pending_sms_parts: dict[tuple[str, str, int], dict[int, DecodedSms]] = defaultdict(dict)
         self._pending_sms_seen_ts: dict[tuple[str, str, int], float] = {}
@@ -496,7 +527,29 @@ class ModemEventsReader:
                 tech = "LTE/auto"
                 break
 
-        self._lte_snapshot = {"rssi_dbm": rssi_dbm, "access_tech": tech, "ts": utc_now_iso()}
+        # Use the existing AT-port owner. A second diagnostics process could
+        # interleave replies and steal asynchronous SMS notifications.
+        module_temp_c = _parse_modem_temperature_c(
+            _at_cmd(ser, "AT+CPMUTEMP", timeout_s=1.0)
+        )
+        module_voltage_v = _parse_modem_voltage_v(
+            _at_cmd(ser, "AT+CBC", timeout_s=1.0)
+        )
+
+        self._lte_snapshot = {
+            "rssi_dbm": rssi_dbm,
+            "access_tech": tech,
+            "module_temp_c": module_temp_c,
+            "module_voltage_v": module_voltage_v,
+            "ts": utc_now_iso(),
+        }
+        log.info(
+            "modem health: temperature_c=%s voltage_v=%s rssi_dbm=%s access_tech=%s",
+            module_temp_c,
+            module_voltage_v,
+            rssi_dbm,
+            tech,
+        )
 
     def _poll_unread_sms(self, ser: serial.Serial) -> list[dict]:
         # PDU mode keeps UDH multipart metadata; text mode can make long SMS look

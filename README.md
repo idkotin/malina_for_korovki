@@ -257,6 +257,17 @@ File logs:
 tail -f /opt/host-monitor/logs/host_monitor.log
 ```
 
+The existing modem AT reader polls SIM7600 module temperature and voltage once
+every 30 seconds. Follow only those health lines with:
+
+```bash
+sudo journalctl -u host-monitor.service -f -o short-iso | grep --line-buffered 'modem health:'
+```
+
+Do not open the AT port concurrently with `minicom`, `screen`, or another
+Python process. A second reader can mix AT replies and consume SMS URCs that
+belong to `host-monitor`.
+
 ## 8) Remote access
 
 Remote access files live in [`remote_access/amnezia`](./remote_access/amnezia). Do not commit real server IPs, passwords, private keys, exported Amnezia configs, or local `known_hosts` files. The repo `.gitignore` already excludes the common secret files in that folder.

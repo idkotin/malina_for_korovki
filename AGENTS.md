@@ -205,6 +205,9 @@ Important details:
 - It emits event dicts into an internal queue, which `main.py` drains and sends.
 - LTE RSSI/access snapshot is read through the same AT reader to avoid AT port
   contention.
+- The same 30-second poll reads SIM7600 module temperature (`AT+CPMUTEMP`) and
+  voltage (`AT+CBC`) and writes a `modem health:` journal line. Never probe
+  these commands from a second process while `host-monitor` owns the AT port.
 
 Events have this shape before `main.py` adds `device_id`:
 
