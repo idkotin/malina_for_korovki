@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/host-monitor
-ExecStart=/opt/host-monitor/.venv/bin/host-monitor --config /opt/host-monitor/config.yaml
+ExecStart=/opt/host-monitor/.venv/bin/python -m host_monitor.main --config /opt/host-monitor/config.yaml
 Restart=always
 RestartSec=2
 
