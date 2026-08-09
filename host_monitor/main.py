@@ -319,3 +319,7 @@ def main(argv: list[str] | None = None) -> None:
         events_reader.stop()
         telemetry_q.close()
         events_q.close()
+
+
+if __name__ == "__main__":
+    main()
