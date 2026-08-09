@@ -104,6 +104,13 @@ def main(argv: list[str] | None = None) -> None:
             sms_reboot_enabled=cfg.sms_reboot.enabled,
             sms_reboot_allowed_number=cfg.sms_reboot.allowed_number,
             sms_reboot_command=cfg.sms_reboot.command,
+            sim_failure_recovery_enabled=cfg.lte.sim_failure_recovery_enabled,
+            sim_failure_poll_interval_s=cfg.lte.sim_failure_poll_interval_s,
+            sim_failure_confirm_s=cfg.lte.sim_failure_confirm_s,
+            sim_failure_reset_cooldown_s=cfg.lte.sim_failure_reset_cooldown_s,
+            sim_failure_reset_window_s=cfg.lte.sim_failure_reset_window_s,
+            sim_failure_max_resets=cfg.lte.sim_failure_max_resets,
+            sim_failure_reset_settle_s=cfg.lte.sim_failure_reset_settle_s,
         ),
         reboot_action=request_system_reboot,
     )

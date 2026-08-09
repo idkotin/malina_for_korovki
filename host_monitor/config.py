@@ -104,6 +104,15 @@ class LteCfg(BaseModel):
     events_enabled: bool = True
     # Periodically poll SIM memory for unread SMS (robust fallback if +CMTI URC missing).
     sms_poll_interval_s: float = 30.0
+    # Recover only a sustained, explicit `AT+CPIN? -> SIM failure` by resetting
+    # the SIM7600 itself. Generic internet/operator failures never trigger it.
+    sim_failure_recovery_enabled: bool = False
+    sim_failure_poll_interval_s: float = 30.0
+    sim_failure_confirm_s: float = 90.0
+    sim_failure_reset_cooldown_s: float = 1800.0
+    sim_failure_reset_window_s: float = 21600.0
+    sim_failure_max_resets: int = 3
+    sim_failure_reset_settle_s: float = 20.0
 
 
 class SmsRebootCfg(BaseModel):

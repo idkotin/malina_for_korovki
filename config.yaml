@@ -87,6 +87,16 @@ lte:
   events_enabled: true
   # Fixed AT port for SMS/call events. If null, we auto-detect from at_ports.
   events_port: null
+  # Field workaround for the confirmed SIM7600 UIM lockup. It reacts only to
+  # a sustained `AT+CPIN? -> SIM failure`, then issues AT+CFUN=1,1 through the
+  # existing AT-port owner. Keep disabled until intentionally enabled on Pi.
+  sim_failure_recovery_enabled: false
+  sim_failure_poll_interval_s: 30
+  sim_failure_confirm_s: 90
+  sim_failure_reset_cooldown_s: 1800
+  sim_failure_reset_window_s: 21600
+  sim_failure_max_resets: 3
+  sim_failure_reset_settle_s: 20
 
 # Manual reboot is intentionally disabled in the public repository config.
 # Put the authorized phone number only into the live config on the Raspberry Pi.

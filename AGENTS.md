@@ -208,6 +208,11 @@ Important details:
 - The same 30-second poll reads SIM7600 module temperature (`AT+CPMUTEMP`) and
   voltage (`AT+CBC`) and writes a `modem health:` journal line. Never probe
   these commands from a second process while `host-monitor` owns the AT port.
+- Optional SIM/UIM recovery uses that same reader. It resets the modem with
+  `AT+CFUN=1,1` only after a sustained explicit `AT+CPIN? -> SIM failure` and is
+  guarded by a cooldown and rolling reset limit.
+- Never treat a generic SMS `ERROR` as full storage. `AT+CMGD=1,4` is allowed
+  only for an explicit storage-full indication.
 
 Events have this shape before `main.py` adds `device_id`:
 
@@ -378,3 +383,7 @@ Implementation map:
   `None` there.
 - Public `config.yaml` keeps both SMS and automatic reboot disabled. Phone
   numbers and production enablement belong only in the live Pi config.
+- The 2026-08-09 outage left the USB composite device and GNSS alive but put the
+  SIM/UIM into an error state. A modem-only `AT+CFUN=1,1` restored it. Public
+  config also keeps this modem-only workaround disabled until deliberately
+  enabled on the live Pi.

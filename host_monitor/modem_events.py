@@ -6,7 +6,7 @@ import queue
 import re
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -51,6 +51,13 @@ class ModemEventsCfg:
     sms_reboot_enabled: bool = False
     sms_reboot_allowed_number: str | None = None
     sms_reboot_command: str = "/reboot"
+    sim_failure_recovery_enabled: bool = False
+    sim_failure_poll_interval_s: float = 30.0
+    sim_failure_confirm_s: float = 90.0
+    sim_failure_reset_cooldown_s: float = 1800.0
+    sim_failure_reset_window_s: float = 21600.0
+    sim_failure_max_resets: int = 3
+    sim_failure_reset_settle_s: float = 20.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +68,10 @@ class DecodedSms:
     concat_ref: str | None = None
     concat_total: int | None = None
     concat_seq: int | None = None
+
+
+class ModemResetRequested(RuntimeError):
+    """The AT reader deliberately reset the modem and must reopen its port."""
 
 
 def _at_readline(ser: serial.Serial, deadline: float) -> str | None:
@@ -136,6 +147,17 @@ def _parse_modem_voltage_v(lines: list[str]) -> float | None:
             value /= 1000.0
         return value
     return None
+
+
+def _is_sms_storage_full(lines: list[str]) -> bool:
+    """Match only explicit SIM/SMS capacity failures, never a generic ERROR."""
+
+    upper = "\n".join(lines).upper()
+    return (
+        "SMS FULL" in upper
+        or "MEMORY FULL" in upper
+        or bool(re.search(r"\+CMS ERROR:\s*322(?:\D|$)", upper))
+    )
 
 
 def decode_maybe_ucs2(text: str) -> str:
@@ -334,9 +356,16 @@ class ModemEventsReader:
     - {"type":"call","timestamp":...,"from":...,"text":""}
     """
 
-    def __init__(self, cfg: ModemEventsCfg, *, reboot_action: Callable[[], None] | None = None):
+    def __init__(
+        self,
+        cfg: ModemEventsCfg,
+        *,
+        reboot_action: Callable[[], None] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+    ):
         self._cfg = cfg
         self._reboot_action = reboot_action
+        self._monotonic = monotonic
         self._q: queue.SimpleQueue[dict] = queue.SimpleQueue()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -354,6 +383,17 @@ class ModemEventsReader:
         self._pending_sms_seen_ts: dict[tuple[str, str, int], float] = {}
         self._reboot_lock = threading.Lock()
         self._reboot_requested = False
+        self._sim_failure_since: float | None = None
+        self._modem_reset_times: deque[float] = deque()
+        self._last_modem_reset_monotonic: float | None = None
+        self._status["sim_recovery"] = {
+            "enabled": cfg.sim_failure_recovery_enabled,
+            "sim_state": "unknown",
+            "failure_for_s": 0.0,
+            "reset_count_in_window": 0,
+            "last_reset_age_s": None,
+            "suppressed_reason": None,
+        }
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -551,12 +591,96 @@ class ModemEventsReader:
             tech,
         )
 
+    def _sim_recovery_status(self, *, sim_state: str, suppressed_reason: str | None = None) -> dict:
+        now = self._monotonic()
+        window_s = max(1.0, float(self._cfg.sim_failure_reset_window_s))
+        while self._modem_reset_times and now - self._modem_reset_times[0] > window_s:
+            self._modem_reset_times.popleft()
+        failure_for_s = (
+            0.0
+            if self._sim_failure_since is None
+            else max(0.0, now - self._sim_failure_since)
+        )
+        last_reset_age_s = (
+            None
+            if self._last_modem_reset_monotonic is None
+            else max(0.0, now - self._last_modem_reset_monotonic)
+        )
+        status = {
+            "enabled": self._cfg.sim_failure_recovery_enabled,
+            "sim_state": sim_state,
+            "failure_for_s": failure_for_s,
+            "reset_count_in_window": len(self._modem_reset_times),
+            "last_reset_age_s": last_reset_age_s,
+            "suppressed_reason": suppressed_reason,
+        }
+        self._status["sim_recovery"] = status
+        return status
+
+    def _poll_sim_health_and_recover(self, ser: serial.Serial) -> None:
+        lines = _at_cmd(ser, "AT+CPIN?", timeout_s=2.0)
+        upper = "\n".join(lines).upper()
+        now = self._monotonic()
+
+        if "+CPIN: READY" in upper:
+            self._sim_failure_since = None
+            self._sim_recovery_status(sim_state="ready")
+            return
+
+        # Only the field-confirmed UIM failure is reset-worthy. SIM BUSY,
+        # missing replies, operator loss, DNS failures, and an intentionally
+        # absent SIM must never cause a modem reset.
+        if "SIM FAILURE" not in upper:
+            self._sim_failure_since = None
+            state = "busy" if "SIM BUSY" in upper else "unknown"
+            self._sim_recovery_status(sim_state=state)
+            return
+
+        if self._sim_failure_since is None:
+            self._sim_failure_since = now
+        status = self._sim_recovery_status(sim_state="failure")
+        failure_for_s = float(status["failure_for_s"])
+        if not self._cfg.sim_failure_recovery_enabled:
+            return
+        if failure_for_s < max(0.0, float(self._cfg.sim_failure_confirm_s)):
+            return
+
+        cooldown_s = max(0.0, float(self._cfg.sim_failure_reset_cooldown_s))
+        if (
+            self._last_modem_reset_monotonic is not None
+            and now - self._last_modem_reset_monotonic < cooldown_s
+        ):
+            self._sim_recovery_status(sim_state="failure", suppressed_reason="cooldown")
+            return
+
+        max_resets = max(0, int(self._cfg.sim_failure_max_resets))
+        if len(self._modem_reset_times) >= max_resets:
+            self._sim_recovery_status(sim_state="failure", suppressed_reason="reset_limit")
+            return
+
+        log.critical(
+            "SIM FAILURE confirmed for %.1fs; requesting SIM7600 functional reset via AT+CFUN=1,1",
+            failure_for_s,
+        )
+        response = _at_cmd(ser, "AT+CFUN=1,1", timeout_s=3.0)
+        if any("ERROR" in line.upper() for line in response):
+            self._last_err = f"modem functional reset rejected: {response[:5]}"
+            log.error("SIM7600 functional reset rejected: response=%s", response[:5])
+            return
+
+        self._last_modem_reset_monotonic = now
+        self._modem_reset_times.append(now)
+        self._sim_failure_since = None
+        self._sim_recovery_status(sim_state="resetting")
+        raise ModemResetRequested("SIM7600 reset requested after confirmed SIM failure")
+
     def _poll_unread_sms(self, ser: serial.Serial) -> list[dict]:
         # PDU mode keeps UDH multipart metadata; text mode can make long SMS look
         # like separate truncated messages.
         last_out: list[str] = []
 
-        for attempt in range(3):
+        capacity_cleared = False
+        for attempt in range(2):
             out = _at_cmd(ser, "AT+CMGL=0", timeout_s=15.0)
             last_out = out
 
@@ -588,14 +712,19 @@ class ModemEventsReader:
                 log.info("SMS polled: count=%s deleted_indices=%s", len(events), sorted(set(processed_indices)))
                 return events
 
-            # If modem reports full/err, clear and retry.
-            upper = "\n".join(out).upper()
-            if ("SMS FULL" in upper) or any("ERROR" == x for x in out) or ("+CMS ERROR" in upper):
+            # Destructive cleanup is allowed only for an explicit storage-full
+            # response. A generic ERROR can mean SIM/UIM failure and must not
+            # trigger repeated delete-all commands.
+            if _is_sms_storage_full(out) and not capacity_cleared:
                 try:
                     _at_cmd(ser, "AT+CMGD=1,4", timeout_s=10.0)
                 except Exception:
                     pass
+                capacity_cleared = True
                 continue
+
+            if any("ERROR" in line.upper() for line in out):
+                log.warning("SMS poll failed without capacity indication: response=%s", out[:5])
 
             # No events and no clear reason.
             break
@@ -615,6 +744,7 @@ class ModemEventsReader:
                     self._last_err = None
                     backoff = 1.0
                     last_lte_poll = 0.0
+                    last_sim_health_poll = 0.0
                     last_sms_poll = 0.0
                     self._pending_call_ts = None
                     while not self._stop.is_set():
@@ -625,6 +755,14 @@ class ModemEventsReader:
                             except Exception as e:
                                 self._last_err = str(e)
                             last_lte_poll = now
+
+                        if (
+                            self._cfg.sim_failure_recovery_enabled
+                            and now - last_sim_health_poll
+                            >= max(1.0, float(self._cfg.sim_failure_poll_interval_s))
+                        ):
+                            self._poll_sim_health_and_recover(ser)
+                            last_sim_health_poll = now
 
                         if now - last_sms_poll >= float(self._cfg.sms_poll_interval_s):
                             try:
@@ -663,8 +801,9 @@ class ModemEventsReader:
                                 log.warning("sms read error: %s", e)
                             continue
 
-                        # When SIM memory is full or there is an SMS-related error,
-                        # clear all SMS to restore reception.
+                        # A storage-full URC is handled conservatively: first
+                        # poll/decode stored messages, then let the poller clear
+                        # capacity only if the command confirms it is full.
                         if "SMS FULL" in line.upper():
                             try:
                                 log.warning("SMS capacity detected (%s). Polling stored parts before cleanup.", line)
@@ -679,8 +818,11 @@ class ModemEventsReader:
 
                         if line.startswith("+CMS ERROR"):
                             try:
-                                log.warning("SMS capacity/error detected (%s). Clearing SIM SMS memory.", line)
-                                _at_cmd(ser, "AT+CMGD=1,4", timeout_s=3.0)
+                                if _is_sms_storage_full([line]):
+                                    log.warning("SMS capacity detected (%s). Clearing SIM SMS memory.", line)
+                                    _at_cmd(ser, "AT+CMGD=1,4", timeout_s=3.0)
+                                else:
+                                    log.warning("SMS error detected without cleanup: %s", line)
                             except Exception as e:
                                 self._last_err = str(e)
                             continue
@@ -698,6 +840,13 @@ class ModemEventsReader:
                             self._dispatch_event({"type": "call", "timestamp": utc_now_iso(), "from": from_num, "text": ""})
                             self._pending_call_ts = None
                             continue
+            except ModemResetRequested as e:
+                self._status["running"] = False
+                self._last_err = str(e)
+                settle_s = max(1.0, float(self._cfg.sim_failure_reset_settle_s))
+                log.warning("SIM7600 is resetting; waiting %.1fs before reopening AT port", settle_s)
+                self._stop.wait(settle_s)
+                backoff = 1.0
             except Exception as e:
                 self._status["running"] = False
                 self._last_err = str(e)
