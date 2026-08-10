@@ -226,6 +226,35 @@ sudo systemctl enable --now host-monitor
 sudo systemctl status host-monitor
 ```
 
+### Стабильный PPP-порт SIM7600
+
+Нельзя привязывать production PPP напрямую к назначаемому ядром имени вроде
+`/dev/ttyUSB3`. После USB-перезапуска SIM7600 тот же PPP-интерфейс может получить
+другой номер `ttyUSBN`, хотя его USB interface number останется равным `03`.
+
+Установка стабильного udev-алиаса `/dev/simcom-ppp`, изменение существующего
+PPP peer с резервной копией и включение осторожного watchdog:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./systemd/install-simcom-ppp.sh --peer-name megafon --restart-lte
+```
+
+Перед изменением `/etc/ppp/peers/megafon` установщик проверяет USB ID SIMCOM
+`1e0e:9001` и interface `03`. Watchdog срабатывает только когда `lte.service`
+уже активен, `/dev/simcom-ppp` существует, а `ppp0` непрерывно отсутствует две
+минуты. Он перезапускает только `lte.service`: не перезагружает малину, не
+сбрасывает USB и не меняет `config.yaml`.
+
+Проверка:
+
+```bash
+readlink -f /dev/simcom-ppp
+systemctl status lte.service simcom-ppp-watchdog.timer --no-pager
+ip -br address show ppp0
+journalctl -t simcom-ppp-watchdog -n 50 --no-pager
+```
+
 Перезапуск и остановка:
 
 ```bash

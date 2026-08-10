@@ -1,0 +1,11 @@
+[Unit]
+Description=Check SIM7600 PPP health every 30 seconds
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=simcom-ppp-watchdog.service
+
+[Install]
+WantedBy=timers.target

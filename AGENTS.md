@@ -387,3 +387,11 @@ Implementation map:
   SIM/UIM into an error state. A modem-only `AT+CFUN=1,1` restored it. Public
   config also keeps this modem-only workaround disabled until deliberately
   enabled on the live Pi.
+- The 2026-08-10 outage repeatedly removed the SIM7600 USB composite device.
+  The persistent `pppd` process kept the disconnected `/dev/ttyUSB3` minor
+  reserved, so USB interface `03` returned under a different `ttyUSBN` name and
+  `lte.service` stayed falsely active without `ppp0`. Production PPP must use
+  the verified udev alias `/dev/simcom-ppp`; install it with
+  `systemd/install-simcom-ppp.sh`. Its optional timer restarts only
+  `lte.service` after two minutes without `ppp0` when the alias exists. It must
+  never reboot the Pi or reset USB.

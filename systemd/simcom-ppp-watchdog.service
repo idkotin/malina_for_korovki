@@ -1,0 +1,7 @@
+[Unit]
+Description=Recover SIM7600 PPP after USB port renumbering
+After=lte.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/simcom-ppp-watchdog

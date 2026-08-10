@@ -236,6 +236,35 @@ sudo systemctl enable --now host-monitor
 sudo systemctl status host-monitor
 ```
 
+### Stable SIM7600 PPP device
+
+Do not bind the production PPP peer directly to a kernel-assigned name such as
+`/dev/ttyUSB3`. After a SIM7600 USB reset the same PPP interface can return with
+a different `ttyUSBN` number while its USB interface number remains `03`.
+
+Install the stable `/dev/simcom-ppp` udev alias, update the existing PPP peer
+with a timestamped backup, and enable the conservative `ppp0` watchdog:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./systemd/install-simcom-ppp.sh --peer-name megafon --restart-lte
+```
+
+The installer verifies SIMCOM USB ID `1e0e:9001` and interface `03` before it
+changes `/etc/ppp/peers/megafon`. The watchdog acts only when `lte.service` is
+already active, `/dev/simcom-ppp` exists and `ppp0` has remained absent for two
+minutes. It restarts only `lte.service`; it does not reboot the Pi, reset USB or
+touch `config.yaml`.
+
+Useful checks:
+
+```bash
+readlink -f /dev/simcom-ppp
+systemctl status lte.service simcom-ppp-watchdog.timer --no-pager
+ip -br address show ppp0
+journalctl -t simcom-ppp-watchdog -n 50 --no-pager
+```
+
 Restart and stop:
 
 ```bash

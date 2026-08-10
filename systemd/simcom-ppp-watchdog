@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+LTE_UNIT="${LTE_UNIT:-lte.service}"
+PPP_INTERFACE="${PPP_INTERFACE:-ppp0}"
+PPP_DEVICE="${PPP_DEVICE:-/dev/simcom-ppp}"
+STATE_DIR="${STATE_DIR:-/run/simcom-ppp-watchdog}"
+MISSING_GRACE_S="${MISSING_GRACE_S:-120}"
+RESTART_COOLDOWN_S="${RESTART_COOLDOWN_S:-300}"
+
+log() {
+  logger -t simcom-ppp-watchdog -- "$*"
+}
+
+now_epoch() {
+  date +%s
+}
+
+read_epoch() {
+  local path="$1"
+  local value=""
+  [[ -r "${path}" ]] && read -r value < "${path}" || true
+  [[ "${value}" =~ ^[0-9]+$ ]] && printf '%s\n' "${value}" || printf '0\n'
+}
+
+install -d -m 755 "${STATE_DIR}"
+exec 9>"${STATE_DIR}/lock"
+flock -n 9 || exit 0
+
+first_missing_path="${STATE_DIR}/first-missing-epoch"
+last_restart_path="${STATE_DIR}/last-restart-epoch"
+
+if [[ -e "/sys/class/net/${PPP_INTERFACE}" ]]; then
+  rm -f -- "${first_missing_path}"
+  exit 0
+fi
+
+# Do not fight deliberate maintenance. The watchdog only repairs an LTE unit
+# that claims to be active while its PPP interface is missing.
+if ! systemctl is-active --quiet "${LTE_UNIT}"; then
+  rm -f -- "${first_missing_path}"
+  exit 0
+fi
+
+now="$(now_epoch)"
+first_missing="$(read_epoch "${first_missing_path}")"
+if (( first_missing == 0 )); then
+  printf '%s\n' "${now}" > "${first_missing_path}"
+  log "${PPP_INTERFACE} missing while ${LTE_UNIT} is active; starting ${MISSING_GRACE_S}s confirmation window"
+  exit 0
+fi
+
+if (( now - first_missing < MISSING_GRACE_S )); then
+  exit 0
+fi
+
+if [[ ! -e "${PPP_DEVICE}" ]]; then
+  log "${PPP_INTERFACE} still missing, but ${PPP_DEVICE} is absent; leaving ${LTE_UNIT} untouched"
+  exit 0
+fi
+
+last_restart="$(read_epoch "${last_restart_path}")"
+if (( last_restart > 0 && now - last_restart < RESTART_COOLDOWN_S )); then
+  exit 0
+fi
+
+printf '%s\n' "${now}" > "${last_restart_path}"
+rm -f -- "${first_missing_path}"
+log "${PPP_INTERFACE} missing for at least ${MISSING_GRACE_S}s with ${PPP_DEVICE} present; restarting ${LTE_UNIT}"
+systemctl --no-block restart "${LTE_UNIT}"

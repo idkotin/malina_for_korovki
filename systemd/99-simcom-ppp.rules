@@ -1,0 +1,3 @@
+# SIM7600 PPP data port. Kernel ttyUSB numbers can change after a USB reset,
+# while the USB interface number remains stable.
+SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="1e0e", ENV{ID_MODEL_ID}=="9001", ENV{ID_USB_INTERFACE_NUM}=="03", SYMLINK+="simcom-ppp"
