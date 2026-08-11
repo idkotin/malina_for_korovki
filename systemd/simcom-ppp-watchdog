@@ -2,11 +2,17 @@
 set -euo pipefail
 
 LTE_UNIT="${LTE_UNIT:-lte.service}"
+HOST_MONITOR_UNIT="${HOST_MONITOR_UNIT:-host-monitor.service}"
 PPP_INTERFACE="${PPP_INTERFACE:-ppp0}"
 PPP_DEVICE="${PPP_DEVICE:-/dev/simcom-ppp}"
 STATE_DIR="${STATE_DIR:-/run/simcom-ppp-watchdog}"
 MISSING_GRACE_S="${MISSING_GRACE_S:-120}"
 RESTART_COOLDOWN_S="${RESTART_COOLDOWN_S:-300}"
+USB_POWER_CYCLE_ENABLED="${USB_POWER_CYCLE_ENABLED:-0}"
+USB_MISSING_GRACE_S="${USB_MISSING_GRACE_S:-300}"
+USB_CYCLE_COOLDOWN_S="${USB_CYCLE_COOLDOWN_S:-1800}"
+USB_HUB_LOCATION="${USB_HUB_LOCATION:-1-1}"
+USB_RETURN_TIMEOUT_S="${USB_RETURN_TIMEOUT_S:-90}"
 
 log() {
   logger -t simcom-ppp-watchdog -- "$*"
@@ -29,9 +35,108 @@ flock -n 9 || exit 0
 
 first_missing_path="${STATE_DIR}/first-missing-epoch"
 last_restart_path="${STATE_DIR}/last-restart-epoch"
+last_usb_cycle_path="${STATE_DIR}/last-usb-cycle-epoch"
+usb_absent_logged_path="${STATE_DIR}/usb-absent-logged"
+usb_recovery_blocked_path="${STATE_DIR}/usb-recovery-blocked"
+
+refuse_usb_cycle() {
+  if [[ ! -e "${usb_recovery_blocked_path}" ]]; then
+    : > "${usb_recovery_blocked_path}"
+    log "refusing USB power cycle: $*"
+  fi
+}
+
+usb_inventory_is_safe() {
+  local usb_id
+  while read -r usb_id; do
+    case "${usb_id}" in
+      1d6b:*|2109:3431|1e0e:9001)
+        ;;
+      *)
+        refuse_usb_cycle "unexpected USB device ${usb_id} is connected"
+        return 1
+        ;;
+    esac
+  done < <(lsusb | awk '{print $6}')
+}
+
+cycle_usb_power() {
+  local now="$1"
+  local last_usb_cycle
+  local host_monitor_was_active=0
+  local attempt
+
+  last_usb_cycle="$(read_epoch "${last_usb_cycle_path}")"
+  if (( last_usb_cycle > 0 && now - last_usb_cycle < USB_CYCLE_COOLDOWN_S )); then
+    return 0
+  fi
+
+  if [[ "${USB_POWER_CYCLE_ENABLED}" != "1" ]]; then
+    if [[ ! -e "${usb_absent_logged_path}" ]]; then
+      : > "${usb_absent_logged_path}"
+      log "${PPP_DEVICE} remains absent; USB power-cycle recovery is disabled"
+    fi
+    return 0
+  fi
+
+  if [[ "$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)" != *"Raspberry Pi 4 Model B"* ]]; then
+    refuse_usb_cycle "this recovery is validated only for Raspberry Pi 4 Model B"
+    return 0
+  fi
+  command -v uhubctl >/dev/null 2>&1 || {
+    refuse_usb_cycle "uhubctl is not installed"
+    return 0
+  }
+  command -v lsusb >/dev/null 2>&1 || {
+    refuse_usb_cycle "lsusb is not installed"
+    return 0
+  }
+  usb_inventory_is_safe || return 0
+  uhubctl -l "${USB_HUB_LOCATION}" >/dev/null 2>&1 || {
+    refuse_usb_cycle "hub ${USB_HUB_LOCATION} is unavailable"
+    return 0
+  }
+
+  rm -f -- "${usb_recovery_blocked_path}"
+
+  systemctl is-active --quiet "${HOST_MONITOR_UNIT}" && host_monitor_was_active=1
+  printf '%s\n' "${now}" > "${last_usb_cycle_path}"
+  log "${PPP_DEVICE} absent for at least ${USB_MISSING_GRACE_S}s; cycling Raspberry Pi external USB power for 10s"
+
+  systemctl stop "${LTE_UNIT}" || true
+  if (( host_monitor_was_active == 1 )); then
+    systemctl stop "${HOST_MONITOR_UNIT}" || true
+  fi
+
+  if ! uhubctl -l "${USB_HUB_LOCATION}" -a cycle -d 10; then
+    log "USB power-cycle command failed; restarting stopped services"
+    systemctl start "${LTE_UNIT}" || true
+    if (( host_monitor_was_active == 1 )); then
+      systemctl start "${HOST_MONITOR_UNIT}" || true
+    fi
+    return 0
+  fi
+
+  for attempt in $(seq 1 "${USB_RETURN_TIMEOUT_S}"); do
+    [[ -e "${PPP_DEVICE}" ]] && break
+    sleep 1
+  done
+
+  if [[ -e "${PPP_DEVICE}" ]]; then
+    log "${PPP_DEVICE} returned after USB power cycle; starting ${LTE_UNIT}"
+    rm -f -- "${first_missing_path}" "${usb_absent_logged_path}" "${usb_recovery_blocked_path}"
+  else
+    log "${PPP_DEVICE} did not return within ${USB_RETURN_TIMEOUT_S}s after USB power cycle"
+  fi
+
+  systemctl start "${LTE_UNIT}" || true
+  if (( host_monitor_was_active == 1 )); then
+    systemctl start "${HOST_MONITOR_UNIT}" || true
+  fi
+}
 
 if [[ -e "/sys/class/net/${PPP_INTERFACE}" ]]; then
-  rm -f -- "${first_missing_path}"
+  rm -f -- "${first_missing_path}" "${usb_absent_logged_path}" "${usb_recovery_blocked_path}"
   exit 0
 fi
 
@@ -55,9 +160,17 @@ if (( now - first_missing < MISSING_GRACE_S )); then
 fi
 
 if [[ ! -e "${PPP_DEVICE}" ]]; then
-  log "${PPP_INTERFACE} still missing, but ${PPP_DEVICE} is absent; leaving ${LTE_UNIT} untouched"
+  if [[ ! -e "${usb_absent_logged_path}" ]]; then
+    : > "${usb_absent_logged_path}"
+    log "${PPP_INTERFACE} still missing and ${PPP_DEVICE} is absent; waiting for ${USB_MISSING_GRACE_S}s USB recovery threshold"
+  fi
+  if (( now - first_missing >= USB_MISSING_GRACE_S )); then
+    cycle_usb_power "${now}"
+  fi
   exit 0
 fi
+
+rm -f -- "${usb_absent_logged_path}" "${usb_recovery_blocked_path}"
 
 last_restart="$(read_epoch "${last_restart_path}")"
 if (( last_restart > 0 && now - last_restart < RESTART_COOLDOWN_S )); then

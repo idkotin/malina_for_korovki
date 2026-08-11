@@ -392,6 +392,10 @@ Implementation map:
   reserved, so USB interface `03` returned under a different `ttyUSBN` name and
   `lte.service` stayed falsely active without `ppp0`. Production PPP must use
   the verified udev alias `/dev/simcom-ppp`; install it with
-  `systemd/install-simcom-ppp.sh`. Its optional timer restarts only
-  `lte.service` after two minutes without `ppp0` when the alias exists. It must
-  never reboot the Pi or reset USB.
+  `systemd/install-simcom-ppp.sh`. Its optional timer restarts `lte.service`
+  after two minutes without `ppp0` when the alias exists. Production hardware
+  testing on 2026-08-11 also validated a full external-USB power cycle on the
+  Raspberry Pi 4 onboard hub. That second stage must remain opt-in, wait five
+  minutes, validate the Pi model and USB inventory, and keep a 30-minute
+  cooldown. It must never reboot the Pi and must refuse to cycle USB while an
+  unexpected USB device is connected.

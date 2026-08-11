@@ -256,6 +256,25 @@ already active, `/dev/simcom-ppp` exists and `ppp0` has remained absent for two
 minutes. It restarts only `lte.service`; it does not reboot the Pi, reset USB or
 touch `config.yaml`.
 
+On the validated Raspberry Pi 4, a second recovery level can be enabled for a
+SIMCOM that disappears completely from `lsusb`:
+
+```bash
+sudo apt-get install -y uhubctl
+sudo bash ./systemd/install-simcom-ppp.sh \
+  --peer-name megafon \
+  --enable-usb-power-cycle \
+  --restart-lte
+```
+
+This mode is disabled by default. After five minutes without both `ppp0` and
+`/dev/simcom-ppp`, the watchdog verifies the Raspberry Pi model, hub `1-1`,
+and the connected USB inventory. A 10-second power cycle is allowed only on a
+Raspberry Pi 4 with no USB devices other than the known root hubs and SIMCOM
+`1e0e:9001`. Raspberry Pi 4 controls all external USB power as one group, so
+any unexpected USB device blocks the cycle. Cycles are limited to one per 30
+minutes and the Raspberry Pi is never rebooted.
+
 Useful checks:
 
 ```bash

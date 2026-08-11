@@ -5,3 +5,4 @@ After=lte.service
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/simcom-ppp-watchdog
+TimeoutStartSec=150

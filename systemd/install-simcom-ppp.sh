@@ -6,16 +6,19 @@ RULE_SOURCE="${SCRIPT_DIR}/99-simcom-ppp.rules"
 WATCHDOG_SOURCE="${SCRIPT_DIR}/simcom-ppp-watchdog"
 WATCHDOG_SERVICE_SOURCE="${SCRIPT_DIR}/simcom-ppp-watchdog.service"
 WATCHDOG_TIMER_SOURCE="${SCRIPT_DIR}/simcom-ppp-watchdog.timer"
+WATCHDOG_USB_CYCLE_SOURCE="${SCRIPT_DIR}/simcom-ppp-watchdog-usb-cycle.conf"
 
 RULE_DEST="/etc/udev/rules.d/99-simcom-ppp.rules"
 WATCHDOG_DEST="/usr/local/sbin/simcom-ppp-watchdog"
 WATCHDOG_SERVICE_DEST="/etc/systemd/system/simcom-ppp-watchdog.service"
 WATCHDOG_TIMER_DEST="/etc/systemd/system/simcom-ppp-watchdog.timer"
+WATCHDOG_USB_CYCLE_DEST="/etc/systemd/system/simcom-ppp-watchdog.service.d/usb-power-cycle.conf"
 BACKUP_ROOT="/var/backups/korovki-simcom-ppp"
 
 PEER_NAME="megafon"
 RESTART_LTE=0
 INSTALL_WATCHDOG=1
+ENABLE_USB_POWER_CYCLE=0
 BACKUP_DIR=""
 
 usage() {
@@ -26,6 +29,8 @@ Options:
   --peer-name NAME    PPP peer file name, default: megafon
   --restart-lte       Restart lte.service and verify ppp0 after installation
   --no-watchdog       Install only the stable udev alias and peer change
+  --enable-usb-power-cycle
+                      After 5 minutes with no modem, cycle Pi 4 external USB
   --help              Show this help
 EOF
 }
@@ -59,6 +64,10 @@ parse_args() {
         INSTALL_WATCHDOG=0
         shift
         ;;
+      --enable-usb-power-cycle)
+        ENABLE_USB_POWER_CYCLE=1
+        shift
+        ;;
       --help|-h)
         usage
         exit 0
@@ -72,6 +81,9 @@ parse_args() {
 
 validate_peer_name() {
   [[ "${PEER_NAME}" =~ ^[a-zA-Z0-9_.+-]+$ ]] || die "Invalid peer name: ${PEER_NAME}"
+  if [[ "${INSTALL_WATCHDOG}" -eq 0 && "${ENABLE_USB_POWER_CYCLE}" -eq 1 ]]; then
+    die "--enable-usb-power-cycle cannot be combined with --no-watchdog"
+  fi
 }
 
 backup_if_exists() {
@@ -88,7 +100,8 @@ require_sources() {
     "${RULE_SOURCE}" \
     "${WATCHDOG_SOURCE}" \
     "${WATCHDOG_SERVICE_SOURCE}" \
-    "${WATCHDOG_TIMER_SOURCE}"; do
+    "${WATCHDOG_TIMER_SOURCE}" \
+    "${WATCHDOG_USB_CYCLE_SOURCE}"; do
     [[ -f "${path}" ]] || die "Required source file is missing: ${path}"
   done
 }
@@ -133,6 +146,14 @@ install_watchdog() {
   install -D -m 755 "${WATCHDOG_SOURCE}" "${WATCHDOG_DEST}"
   install -D -m 644 "${WATCHDOG_SERVICE_SOURCE}" "${WATCHDOG_SERVICE_DEST}"
   install -D -m 644 "${WATCHDOG_TIMER_SOURCE}" "${WATCHDOG_TIMER_DEST}"
+  if [[ "${ENABLE_USB_POWER_CYCLE}" -eq 1 ]]; then
+    command -v uhubctl >/dev/null 2>&1 || die "uhubctl is required for --enable-usb-power-cycle"
+    [[ "$(tr -d '\0' < /proc/device-tree/model 2>/dev/null || true)" == *"Raspberry Pi 4 Model B"* ]] \
+      || die "USB power-cycle recovery is validated only for Raspberry Pi 4 Model B"
+    uhubctl -l 1-1 >/dev/null 2>&1 || die "uhubctl cannot access Raspberry Pi USB hub 1-1"
+    install -D -m 644 "${WATCHDOG_USB_CYCLE_SOURCE}" "${WATCHDOG_USB_CYCLE_DEST}"
+    log "Enabled guarded Raspberry Pi 4 USB power-cycle recovery"
+  fi
   systemctl daemon-reload
   systemctl enable --now simcom-ppp-watchdog.timer
   log "Enabled simcom-ppp-watchdog.timer"
@@ -171,6 +192,7 @@ main() {
   backup_if_exists "${WATCHDOG_DEST}"
   backup_if_exists "${WATCHDOG_SERVICE_DEST}"
   backup_if_exists "${WATCHDOG_TIMER_DEST}"
+  backup_if_exists "${WATCHDOG_USB_CYCLE_DEST}"
 
   install_alias_rule
   update_peer_file
@@ -183,6 +205,7 @@ Alias: /dev/simcom-ppp -> $(readlink -f /dev/simcom-ppp)
 Peer: /etc/ppp/peers/${PEER_NAME}
 Backup: ${BACKUP_DIR}
 Watchdog: $([[ "${INSTALL_WATCHDOG}" -eq 1 ]] && printf 'enabled' || printf 'not installed')
+USB power-cycle recovery: $([[ "${ENABLE_USB_POWER_CYCLE}" -eq 1 ]] && printf 'enabled' || printf 'not changed')
 
 Checks:
   udevadm info --query=property --name=/dev/simcom-ppp

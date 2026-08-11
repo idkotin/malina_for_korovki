@@ -246,6 +246,25 @@ sudo bash ./systemd/install-simcom-ppp.sh --peer-name megafon --restart-lte
 минуты. Он перезапускает только `lte.service`: не перезагружает малину, не
 сбрасывает USB и не меняет `config.yaml`.
 
+На проверенной Raspberry Pi 4 можно отдельно включить второй уровень
+восстановления полного исчезновения SIMCOM из `lsusb`:
+
+```bash
+sudo apt-get install -y uhubctl
+sudo bash ./systemd/install-simcom-ppp.sh \
+  --peer-name megafon \
+  --enable-usb-power-cycle \
+  --restart-lte
+```
+
+Этот режим по умолчанию выключен. Через пять минут без `ppp0` и без
+`/dev/simcom-ppp` watchdog проверяет модель Raspberry Pi, доступность хаба
+`1-1` и список USB-устройств. Цикл питания на 10 секунд разрешён только на
+Raspberry Pi 4 и только если подключены известные корневые хабы и SIMCOM
+`1e0e:9001`. Все внешние USB-порты Pi 4 имеют общее управление питанием,
+поэтому наличие любого другого USB-устройства блокирует цикл. Повторный цикл
+разрешается не чаще одного раза в 30 минут; Raspberry Pi не перезагружается.
+
 Проверка:
 
 ```bash
