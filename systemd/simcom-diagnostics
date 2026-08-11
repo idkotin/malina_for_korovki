@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+one_line() {
+  tr '\n' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+command_text() {
+  "$@" 2>&1 | one_line
+}
+
+now="$(date --iso-8601=seconds)"
+uptime_seconds="$(cut -d. -f1 /proc/uptime 2>/dev/null || printf '?')"
+throttled="$(command_text vcgencmd get_throttled)"
+temperature="$(command_text vcgencmd measure_temp)"
+usb_ids="$(lsusb 2>/dev/null | awk '{print $6}' | paste -sd, -)"
+hub_status="$(command_text timeout 5 uhubctl -l 1-1)"
+alias_target="missing"
+[[ -e /dev/simcom-ppp ]] && alias_target="$(readlink -f /dev/simcom-ppp 2>/dev/null || printf present)"
+ppp_address="$(command_text ip -br address show ppp0)"
+default_route="$(command_text ip route show default)"
+internet_ping="$(timeout 3 ping -c 1 -W 2 1.1.1.1 2>&1 | tail -n 2 | one_line)"
+dns_result="$(timeout 3 getent ahostsv4 vi-korm.ru 2>&1 | head -n 1 | one_line)"
+ppp_rx="missing"
+ppp_tx="missing"
+[[ -r /sys/class/net/ppp0/statistics/rx_bytes ]] && read -r ppp_rx < /sys/class/net/ppp0/statistics/rx_bytes
+[[ -r /sys/class/net/ppp0/statistics/tx_bytes ]] && read -r ppp_tx < /sys/class/net/ppp0/statistics/tx_bytes
+lte_state="$(systemctl is-active lte.service 2>&1 || true)"
+host_state="$(systemctl is-active host-monitor.service 2>&1 || true)"
+watchdog_state="$(systemctl is-active simcom-ppp-watchdog.timer 2>&1 || true)"
+usb_runtime="missing"
+usb_control="missing"
+usb_authorized="missing"
+if [[ -d /sys/bus/usb/devices/1-1.4 ]]; then
+  [[ -r /sys/bus/usb/devices/1-1.4/power/runtime_status ]] \
+    && read -r usb_runtime < /sys/bus/usb/devices/1-1.4/power/runtime_status
+  [[ -r /sys/bus/usb/devices/1-1.4/power/control ]] \
+    && read -r usb_control < /sys/bus/usb/devices/1-1.4/power/control
+  [[ -r /sys/bus/usb/devices/1-1.4/authorized ]] \
+    && read -r usb_authorized < /sys/bus/usb/devices/1-1.4/authorized
+fi
+root_free_kb="$(df -Pk / 2>/dev/null | awk 'NR==2 {print $4}')"
+load="$(one_line < /proc/loadavg 2>/dev/null || printf '?')"
+
+printf 'ts=%q uptime_s=%q throttled=%q temp=%q usb_ids=%q hub=%q alias=%q ppp=%q default_route=%q ping=%q dns=%q ppp_rx=%q ppp_tx=%q lte=%q host_monitor=%q watchdog=%q usb_runtime=%q usb_control=%q usb_authorized=%q root_free_kb=%q load=%q\n' \
+  "${now}" "${uptime_seconds}" "${throttled}" "${temperature}" "${usb_ids:-none}" "${hub_status}" \
+  "${alias_target}" "${ppp_address}" "${default_route}" "${internet_ping}" "${dns_result}" "${ppp_rx}" "${ppp_tx}" \
+  "${lte_state}" "${host_state}" "${watchdog_state}" "${usb_runtime}" \
+  "${usb_control}" "${usb_authorized}" "${root_free_kb:-?}" "${load}"

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OUT_DIR="${OUT_DIR:-/var/log/simcom-incidents}"
+KEEP_FILES="${KEEP_FILES:-30}"
+reason="${1:-manual}"
+reason="$(printf '%s' "${reason}" | tr -c 'a-zA-Z0-9_.-' '_')"
+timestamp="$(date +%Y%m%d-%H%M%S)"
+
+install -d -m 750 "${OUT_DIR}"
+tmp_path="$(mktemp "${OUT_DIR}/.incident-${timestamp}-XXXXXX.log")"
+final_path="${OUT_DIR}/incident-${timestamp}-${reason}.log.gz"
+
+cleanup() {
+  rm -f -- "${tmp_path}"
+}
+trap cleanup EXIT
+
+section() {
+  printf '\n===== %s =====\n' "$1"
+}
+
+{
+  section "INCIDENT"
+  printf 'reason=%s\n' "${reason}"
+  date --iso-8601=seconds
+  uptime
+  uptime -s
+
+  section "COMPACT SNAPSHOT"
+  /usr/local/sbin/simcom-diagnostics || true
+
+  section "POWER AND PLATFORM"
+  tr -d '\0' < /proc/device-tree/model 2>/dev/null || true
+  printf '\n'
+  vcgencmd get_throttled 2>&1 || true
+  vcgencmd measure_temp 2>&1 || true
+  vcgencmd measure_volts core 2>&1 || true
+  free -h || true
+  df -h / /var/log || true
+
+  section "NETWORK"
+  ip -details -statistics link show || true
+  ip -br address || true
+  ip route show table all || true
+  ip rule show || true
+
+  section "USB"
+  lsusb || true
+  lsusb -t || true
+  uhubctl 2>&1 || true
+  ls -l /dev/simcom-ppp /dev/ttyUSB* /dev/cdc-wdm* 2>&1 || true
+  for dev in /dev/ttyUSB*; do
+    [[ -e "${dev}" ]] || continue
+    printf '\n--- %s ---\n' "${dev}"
+    udevadm info --query=property --name="${dev}" 2>&1 \
+      | grep -E 'DEVNAME=|ID_VENDOR_ID=|ID_MODEL_ID=|ID_USB_INTERFACE_NUM=|ID_PATH=' \
+      || true
+  done
+  for attr in authorized power/control power/runtime_status power/autosuspend_delay_ms; do
+    printf '%s=' "${attr}"
+    cat "/sys/bus/usb/devices/1-1.4/${attr}" 2>&1 || true
+  done
+
+  section "SYSTEMD STATE"
+  systemctl --no-pager --full status \
+    lte.service host-monitor.service simcom-ppp-watchdog.timer \
+    simcom-diagnostics.timer || true
+
+  section "KERNEL LAST 20 MINUTES"
+  journalctl -k --since "20 minutes ago" -o short-iso-precise --no-pager || true
+
+  section "LTE LAST 20 MINUTES"
+  journalctl -u lte.service --since "20 minutes ago" -o short-iso-precise --no-pager || true
+
+  section "HOST MONITOR LAST 20 MINUTES"
+  journalctl -u host-monitor.service --since "20 minutes ago" -o short-iso-precise --no-pager || true
+
+  section "WATCHDOG LAST 2 HOURS"
+  journalctl -t simcom-ppp-watchdog --since "2 hours ago" -o short-iso-precise --no-pager || true
+
+  section "DIAGNOSTIC SNAPSHOTS LAST 20 MINUTES"
+  journalctl -t simcom-diag --since "20 minutes ago" -o short-iso-precise --no-pager || true
+
+  section "BOOTS"
+  journalctl --list-boots --no-pager || true
+
+  section "PREVIOUS BOOT KERNEL TAIL"
+  journalctl -b -1 -k -n 1000 -o short-iso-precise --no-pager || true
+
+  section "PREVIOUS BOOT LTE AND WATCHDOG TAIL"
+  journalctl -b -1 -u lte.service -n 500 -o short-iso-precise --no-pager || true
+  journalctl -b -1 -t simcom-ppp-watchdog -n 200 -o short-iso-precise --no-pager || true
+} > "${tmp_path}" 2>&1
+
+gzip -9 -c -- "${tmp_path}" > "${final_path}"
+chmod 640 "${final_path}"
+
+shopt -s nullglob
+files=("${OUT_DIR}"/incident-*.log.gz)
+if (( ${#files[@]} > KEEP_FILES )); then
+  IFS=$'\n' files=($(printf '%s\n' "${files[@]}" | sort))
+  unset IFS
+  remove_count=$(( ${#files[@]} - KEEP_FILES ))
+  for ((i = 0; i < remove_count; i++)); do
+    [[ "${files[i]}" == "${OUT_DIR}"/incident-*.log.gz ]] && rm -f -- "${files[i]}"
+  done
+fi
+
+trap - EXIT
+rm -f -- "${tmp_path}"
+logger -t simcom-incident -- "saved ${final_path} reason=${reason}"
+printf '%s\n' "${final_path}"

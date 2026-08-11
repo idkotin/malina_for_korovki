@@ -284,6 +284,32 @@ ip -br address show ppp0
 journalctl -t simcom-ppp-watchdog -n 50 --no-pager
 ```
 
+### Persistent SIMCOM incident diagnostics
+
+Install bounded persistent journaling, one-minute USB/PPP/power snapshots, PPP
+up/down transition records, and compressed pre-recovery incident bundles:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./systemd/install-simcom-diagnostics.sh
+```
+
+The journal is limited to 256 MiB, keeps at least 512 MiB free, and retains at
+most 14 days. The newest 30 incident bundles are kept in
+`/var/log/simcom-incidents`. The periodic probe never opens an AT, GPS, or QMI
+port, so it cannot contend with `host-monitor` or PPP.
+
+Useful checks and manual capture:
+
+```bash
+systemctl status simcom-diagnostics.timer --no-pager
+journalctl -t simcom-diag -n 20 --no-pager
+journalctl -t simcom-ppp-transition -n 20 --no-pager
+sudo capture-simcom-incident manual
+sudo ls -lh /var/log/simcom-incidents
+journalctl --disk-usage
+```
+
 Restart and stop:
 
 ```bash

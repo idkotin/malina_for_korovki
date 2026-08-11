@@ -13,6 +13,7 @@ USB_MISSING_GRACE_S="${USB_MISSING_GRACE_S:-300}"
 USB_CYCLE_COOLDOWN_S="${USB_CYCLE_COOLDOWN_S:-1800}"
 USB_HUB_LOCATION="${USB_HUB_LOCATION:-1-1}"
 USB_RETURN_TIMEOUT_S="${USB_RETURN_TIMEOUT_S:-90}"
+INCIDENT_CAPTURE="${INCIDENT_CAPTURE:-/usr/local/sbin/capture-simcom-incident}"
 
 log() {
   logger -t simcom-ppp-watchdog -- "$*"
@@ -27,6 +28,13 @@ read_epoch() {
   local value=""
   [[ -r "${path}" ]] && read -r value < "${path}" || true
   [[ "${value}" =~ ^[0-9]+$ ]] && printf '%s\n' "${value}" || printf '0\n'
+}
+
+capture_incident() {
+  local reason="$1"
+  [[ -x "${INCIDENT_CAPTURE}" ]] || return 0
+  timeout 20 "${INCIDENT_CAPTURE}" "${reason}" >/dev/null 2>&1 \
+    || log "incident capture failed or timed out for reason=${reason}"
 }
 
 install -d -m 755 "${STATE_DIR}"
@@ -102,6 +110,7 @@ cycle_usb_power() {
   systemctl is-active --quiet "${HOST_MONITOR_UNIT}" && host_monitor_was_active=1
   printf '%s\n' "${now}" > "${last_usb_cycle_path}"
   log "${PPP_DEVICE} absent for at least ${USB_MISSING_GRACE_S}s; cycling Raspberry Pi external USB power for 10s"
+  capture_incident "before-usb-power-cycle"
 
   systemctl stop "${LTE_UNIT}" || true
   if (( host_monitor_was_active == 1 )); then
@@ -180,4 +189,5 @@ fi
 printf '%s\n' "${now}" > "${last_restart_path}"
 rm -f -- "${first_missing_path}"
 log "${PPP_INTERFACE} missing for at least ${MISSING_GRACE_S}s with ${PPP_DEVICE} present; restarting ${LTE_UNIT}"
+capture_incident "before-lte-restart"
 systemctl --no-block restart "${LTE_UNIT}"

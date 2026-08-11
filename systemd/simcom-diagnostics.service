@@ -1,0 +1,12 @@
+[Unit]
+Description=Record a compact SIMCOM, USB, PPP and Raspberry Pi health snapshot
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/simcom-diagnostics
+SyslogIdentifier=simcom-diag
+StandardOutput=journal
+StandardError=journal
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=20

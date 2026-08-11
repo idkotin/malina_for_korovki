@@ -274,6 +274,33 @@ ip -br address show ppp0
 journalctl -t simcom-ppp-watchdog -n 50 --no-pager
 ```
 
+### Постоянная диагностика аварий SIMCOM
+
+Установка ограниченного постоянного journal, ежеминутных снимков
+USB/PPP/питания, записей переходов PPP up/down и сжатых снимков непосредственно
+перед автоматическим восстановлением:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./systemd/install-simcom-diagnostics.sh
+```
+
+Journal ограничен 256 МиБ, всегда оставляет минимум 512 МиБ свободного места и
+хранит не больше 14 дней. В `/var/log/simcom-incidents` сохраняются 30 последних
+аварийных архивов. Периодическая диагностика не открывает AT, GPS или QMI-порты,
+поэтому не конфликтует с `host-monitor` и PPP.
+
+Проверка и ручное создание снимка:
+
+```bash
+systemctl status simcom-diagnostics.timer --no-pager
+journalctl -t simcom-diag -n 20 --no-pager
+journalctl -t simcom-ppp-transition -n 20 --no-pager
+sudo capture-simcom-incident manual
+sudo ls -lh /var/log/simcom-incidents
+journalctl --disk-usage
+```
+
 Перезапуск и остановка:
 
 ```bash

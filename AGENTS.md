@@ -399,3 +399,8 @@ Implementation map:
   minutes, validate the Pi model and USB inventory, and keep a 30-minute
   cooldown. It must never reboot the Pi and must refuse to cycle USB while an
   unexpected USB device is connected.
+- Install `systemd/install-simcom-diagnostics.sh` when persistent field evidence
+  is required. It bounds persistent journald storage, records a compact
+  USB/PPP/power snapshot every minute, logs PPP up/down hooks, and stores the
+  newest 30 compressed incident bundles. Diagnostic probes must never open an
+  AT, GPS, or QMI port because `host-monitor` and PPP already own them.

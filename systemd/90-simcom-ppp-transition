@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -u
+
+case "${0}" in
+  */ip-up.d/*) transition="up" ;;
+  */ip-down.d/*) transition="down" ;;
+  *) transition="unknown" ;;
+esac
+
+interface="${1:-unknown}"
+tty_device="${2:-unknown}"
+speed="${3:-unknown}"
+local_ip="${4:-unknown}"
+remote_ip="${5:-unknown}"
+ipparam="${6:-}"
+
+logger -t simcom-ppp-transition -- \
+  "transition=${transition} interface=${interface} tty=${tty_device} speed=${speed} local=${local_ip} remote=${remote_ip} ipparam=${ipparam} dns1=${DNS1:-} dns2=${DNS2:-}"
