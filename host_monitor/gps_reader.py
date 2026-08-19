@@ -23,6 +23,8 @@ class GpsCfg:
     baud: int | None
     baud_candidates: list[int]
     max_fix_age_s: float = 3.0
+    max_serial_backlog_bytes: int = 4096
+    validate_source_time: bool = True
 
 
 def _parse_lat_lon(lat_str: str, lat_hemi: str, lon_str: str, lon_hemi: str) -> tuple[float, float] | None:
@@ -100,8 +102,13 @@ def _parse_nmea_utc_s(kind: str, parts: list[str], now_utc: datetime | None = No
 
 def _nmea_body_if_checksum_valid(line: str) -> str | None:
     line = line.strip()
-    if not line.startswith("$"):
+    # Some u-blox configurations emit UBX binary and NMEA on the same UART.
+    # A UBX packet can then precede a valid NMEA sentence before the next LF.
+    # Keep the NMEA suffix instead of dropping the whole serial line.
+    nmea_start = line.find("$")
+    if nmea_start < 0:
         return None
+    line = line[nmea_start:]
     if "*" not in line:
         # Some modem firmware omits checksums. Keep compatibility, but verify
         # every sentence that does provide one.
@@ -202,6 +209,7 @@ class GpsReader:
         self._last_fix_source_utc_s: float | None = None
         self._last_speed_monotonic: float | None = None
         self._last_stale_source_log_monotonic = 0.0
+        self._last_backlog_log_monotonic = 0.0
 
     def start(self) -> None:
         if not self._cfg.enabled:
@@ -223,7 +231,11 @@ class GpsReader:
             snapshot = self._latest.model_copy(deep=True)
             arrival_age_s = None if self._last_fix_monotonic is None else max(0.0, now - self._last_fix_monotonic)
             source_utc_s = self._last_fix_source_utc_s
-        source_age_s = None if source_utc_s is None else abs(wall_now - source_utc_s)
+        source_age_s = (
+            None
+            if source_utc_s is None or not self._cfg.validate_source_time
+            else abs(wall_now - source_utc_s)
+        )
         ages = [age for age in (arrival_age_s, source_age_s) if age is not None]
         age_s = max(ages) if ages else None
         snapshot.age_s = age_s
@@ -258,11 +270,36 @@ class GpsReader:
             self._last_fix_source_utc_s = None
             self._last_speed_monotonic = None
 
+    def _discard_excess_backlog(self, ser: serial.Serial) -> bool:
+        """Drop queued UART data if it can no longer be considered live."""
+        limit = max(0, int(self._cfg.max_serial_backlog_bytes))
+        if limit == 0:
+            return False
+        queued = int(ser.in_waiting)
+        if queued <= limit:
+            return False
+
+        ser.reset_input_buffer()
+        self._invalidate_fix()
+        now_monotonic = time.monotonic()
+        if now_monotonic - self._last_backlog_log_monotonic >= 10.0:
+            log.warning(
+                "GPS serial backlog discarded: queued_bytes=%s limit_bytes=%s",
+                queued,
+                limit,
+            )
+            self._last_backlog_log_monotonic = now_monotonic
+        return True
+
     def _candidate_ports(self) -> list[str]:
-        fixed = [self._cfg.port] if self._cfg.port else []
+        # A configured port is an explicit hardware binding. Do not silently
+        # fall back to an unrelated USB modem/GNSS device if it disappears.
+        if self._cfg.port:
+            return [self._cfg.port]
+
         dynamic = [str(p) for p in Path("/dev").glob("ttyUSB*")]
         merged: list[str] = []
-        for p in fixed + self._cfg.port_candidates + dynamic:
+        for p in self._cfg.port_candidates + dynamic:
             if p and p not in merged:
                 merged.append(p)
         return merged
@@ -303,6 +340,10 @@ class GpsReader:
                 with self._open_serial() as ser:
                     backoff = 1.0
                     while not self._stop.is_set():
+                        if self._discard_excess_backlog(ser):
+                            # A live 10 Hz receiver will provide a replacement
+                            # fix almost immediately after the buffer reset.
+                            continue
                         # Drain serial input and keep only the newest parsed position.
                         latest_pos: Position | None = None
                         got_any = False
@@ -333,7 +374,7 @@ class GpsReader:
                         if latest_pos is not None:
                             source_age_s = (
                                 None
-                                if latest_fix_source_utc_s is None
+                                if latest_fix_source_utc_s is None or not self._cfg.validate_source_time
                                 else abs(time.time() - latest_fix_source_utc_s)
                             )
                             if source_age_s is not None and source_age_s > max(0.1, float(self._cfg.max_fix_age_s)):

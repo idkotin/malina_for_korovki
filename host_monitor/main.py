@@ -75,6 +75,8 @@ def main(argv: list[str] | None = None) -> None:
             baud=cfg.gps.baud,
             baud_candidates=cfg.gps.baud_candidates,
             max_fix_age_s=cfg.gps.max_fix_age_s,
+            max_serial_backlog_bytes=cfg.gps.max_serial_backlog_bytes,
+            validate_source_time=cfg.gps.validate_source_time,
         )
     )
     gps.start()

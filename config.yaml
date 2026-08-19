@@ -24,15 +24,20 @@ buffer:
 
 gps:
   enabled: true
-  # Fixed GPS port. Keep null to auto-detect from port_candidates.
-  port: null
-  # Add all possible modem ttyUSB ports here.
-  port_candidates: ["/dev/ttyUSB1", "/dev/ttyUSB3", "/dev/ttyUSB0", "/dev/ttyUSB2"]
-  # For SIM7600 GPS this is often 115200.
+  # HGLRC M100 Mini connected to Raspberry Pi GPIO UART.
+  port: "/dev/serial0"
+  # Used only when port is null. A fixed port never falls back to candidates.
+  port_candidates: []
   baud: 115200
   baud_candidates: [9600, 19200, 38400, 57600, 115200]
   # Stop reporting an old position as valid after serial/GNSS stalls.
-  max_fix_age_s: 3.0
+  max_fix_age_s: 1.0
+  # 4096 bytes is about 0.36 s at 115200 baud. If the reader falls further
+  # behind, discard the queue and wait about 0.1 s for a new M10 fix.
+  max_serial_backlog_bytes: 4096
+  # Direct UART is drained continuously, and may need to work before NTP sync.
+  # Freshness is still enforced from the local monotonic arrival timestamp.
+  validate_source_time: false
 
 weight:
   enabled: false
@@ -79,12 +84,13 @@ wifi:
   max_snapshot_age_s: 2.0
 
 lte:
-  enabled: true
+  # SIM7600 has been removed; internet is provided independently.
+  enabled: false
   # Preferred: ModemManager (mmcli). If not installed, we'll try AT.
   mmcli: "mmcli"
   at_ports: ["/dev/ttyUSB0", "/dev/ttyUSB2", "/dev/ttyUSB3"]
   at_baud: 115200
-  events_enabled: true
+  events_enabled: false
   # Fixed AT port for SMS/call events. If null, we auto-detect from at_ports.
   events_port: null
   # Field workaround for the confirmed SIM7600 UIM lockup. It reacts only to

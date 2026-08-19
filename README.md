@@ -2,7 +2,11 @@
 
 Russian version: [README.ru.md](./README.ru.md)
 
-Telemetry client for Raspberry Pi 4 + SIM7600 + Waveshare ADS1263.
+Telemetry client for Raspberry Pi 4 + an independent UART GNSS receiver + Waveshare ADS1263.
+
+The current hardware migration uses an HGLRC M100 Mini and independent internet
+connectivity. See [M100_MIGRATION.md](M100_MIGRATION.md) for wiring, Raspberry Pi
+UART setup, SIM7600 service retirement, and hardware validation.
 
 - Sends telemetry via HTTP POST (JSON) at configured frequency
 - Buffers unsent telemetry and modem events in SQLite during outages
@@ -145,6 +149,7 @@ Important fields:
 - `gps.port`: fixed GPS serial port (`null` for auto-detect)
 - `gps.port_candidates`: candidate GPS ports
 - `gps.max_fix_age_s`: maximum fix age; older coordinates are sent as invalid instead of being reused
+- `gps.max_serial_backlog_bytes`: discard an overfilled UART queue instead of treating queued NMEA as a fresh fix
 - `lte.at_ports`: candidate AT ports
 - `weight.enabled`: enable or disable weight reading
 - `weight.simulate`: use a fake weight value instead of the ADC

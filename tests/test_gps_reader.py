@@ -8,7 +8,16 @@ from host_monitor.gps_reader import GpsCfg, GpsReader, _parse_nmea_line
 from host_monitor.models import Position
 
 
-def make_reader(*, max_fix_age_s: float = 3.0) -> GpsReader:
+class FakeSerial:
+    def __init__(self, queued: int):
+        self.in_waiting = queued
+        self.reset_calls = 0
+
+    def reset_input_buffer(self) -> None:
+        self.reset_calls += 1
+
+
+def make_reader(*, max_fix_age_s: float = 3.0, validate_source_time: bool = True) -> GpsReader:
     return GpsReader(
         GpsCfg(
             enabled=True,
@@ -17,6 +26,8 @@ def make_reader(*, max_fix_age_s: float = 3.0) -> GpsReader:
             baud=115200,
             baud_candidates=[115200],
             max_fix_age_s=max_fix_age_s,
+            max_serial_backlog_bytes=4096,
+            validate_source_time=validate_source_time,
         )
     )
 
@@ -47,6 +58,16 @@ class NmeaParserTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(position)
+
+    def test_rmc_after_ubx_binary_prefix_is_accepted(self) -> None:
+        position = _parse_nmea_line(
+            "\x00\xb5b\x01\x07garbage$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A"
+        )
+
+        self.assertIsNotNone(position)
+        assert position is not None
+        self.assertAlmostEqual(position.lat or 0.0, 48.1173, places=4)
+        self.assertAlmostEqual(position.speed_kmh or 0.0, 41.4848, places=4)
 
     def test_gga_source_time_uses_nearest_utc_day(self) -> None:
         position = _parse_nmea_line(
@@ -100,6 +121,32 @@ class GpsFreshnessTests(unittest.TestCase):
         self.assertIsNone(position.speed_kmh)
         self.assertGreater(position.age_s or 0.0, 3500.0)
 
+    def test_direct_uart_can_ignore_absolute_time_before_ntp_sync(self) -> None:
+        reader = make_reader(max_fix_age_s=3.0, validate_source_time=False)
+        reader._latest = Position(lat=55.1, lon=82.8, quality=1, speed_kmh=7.0)
+        reader._last_fix_monotonic = time.monotonic() - 0.1
+        reader._last_fix_source_utc_s = time.time() - 3600.0
+        reader._last_speed_monotonic = time.monotonic() - 0.1
+
+        position = reader.latest()
+
+        self.assertEqual(position.quality, 1)
+        self.assertEqual(position.speed_kmh, 7.0)
+        self.assertLess(position.age_s or 99.0, 1.0)
+
+    def test_fixed_port_does_not_fall_back_to_modem_candidates(self) -> None:
+        reader = GpsReader(
+            GpsCfg(
+                enabled=True,
+                port="/dev/serial0",
+                port_candidates=["/dev/ttyUSB1"],
+                baud=115200,
+                baud_candidates=[9600],
+            )
+        )
+
+        self.assertEqual(reader._candidate_ports(), ["/dev/serial0"])
+
     def test_speed_expires_without_a_recent_rmc_sentence(self) -> None:
         reader = make_reader(max_fix_age_s=3.0)
         reader._latest = Position(lat=55.1, lon=82.8, quality=1, speed_kmh=137.048)
@@ -124,6 +171,27 @@ class GpsFreshnessTests(unittest.TestCase):
         self.assertIsNone(position.lon)
         self.assertEqual(position.quality, 0)
         self.assertIsNone(position.age_s)
+
+    def test_excess_serial_backlog_is_discarded_and_fix_invalidated(self) -> None:
+        reader = make_reader()
+        reader._latest = Position(lat=55.1, lon=82.8, quality=1)
+        reader._last_fix_monotonic = time.monotonic()
+        serial_port = FakeSerial(queued=4097)
+
+        discarded = reader._discard_excess_backlog(serial_port)  # type: ignore[arg-type]
+
+        self.assertTrue(discarded)
+        self.assertEqual(serial_port.reset_calls, 1)
+        self.assertEqual(reader.latest().quality, 0)
+
+    def test_small_serial_backlog_is_kept(self) -> None:
+        reader = make_reader()
+        serial_port = FakeSerial(queued=4096)
+
+        discarded = reader._discard_excess_backlog(serial_port)  # type: ignore[arg-type]
+
+        self.assertFalse(discarded)
+        self.assertEqual(serial_port.reset_calls, 0)
 
 
 if __name__ == "__main__":

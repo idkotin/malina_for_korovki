@@ -39,7 +39,7 @@ The systemd service runs:
 
 The Raspberry Pi "host" gathers and sends machine telemetry:
 
-- GPS from SIM7600 serial NMEA ports.
+- GPS from the HGLRC M100 Mini direct UART NMEA stream (`/dev/serial0`).
 - LTE RSSI/access technology from the modem AT/events reader.
 - SMS and call events from the modem AT port.
 - Weight from a Waveshare ADS1263 HAT, optionally disabled or simulated.
@@ -223,7 +223,12 @@ Events have this shape before `main.py` adds `device_id`:
 
 ## GPS
 
-`host_monitor/gps_reader.py` runs in a daemon thread.
+`host_monitor/gps_reader.py` runs in a daemon thread. The current production
+hardware is an HGLRC M100 Mini on the Raspberry Pi GPIO UART at 115200 baud.
+When `gps.port` is fixed, the reader must not fall back to unrelated ttyUSB
+devices. Direct UART deployments may disable absolute NMEA/system-clock
+comparison so GPS remains usable before NTP sync; monotonic arrival freshness
+must remain enforced.
 
 It auto-detects candidate `/dev/ttyUSB*` ports and baud rates by looking for
 NMEA. It parses:

@@ -47,6 +47,14 @@ class GpsCfg(BaseModel):
     baud: int | None = None
     baud_candidates: list[int] = Field(default_factory=lambda: [9600, 19200, 38400, 57600, 115200])
     max_fix_age_s: float = 3.0
+    # If the UART reader ever falls behind, discard queued bytes instead of
+    # timestamping old NMEA sentences as newly arrived fixes. 4096 bytes are
+    # roughly 0.36 seconds at 115200 baud.
+    max_serial_backlog_bytes: int = 4096
+    # Absolute NMEA UTC validation protects modem-backed serial ports from
+    # queued old data. Disable it for a direct UART GNSS receiver so a cold Pi
+    # without NTP/RTC can still acquire a valid position.
+    validate_source_time: bool = True
 
 
 class WeightCfg(BaseModel):
