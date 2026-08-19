@@ -175,6 +175,12 @@ Telemetry health flags:
 - `weight_valid`: whether the current weight sample is valid
 - `events_reader_ok`: whether the modem events reader is currently healthy
 
+The M100 UART reader frames both text NMEA (GGA/RMC/GNS) and checksum-verified
+binary `UBX-NAV-PVT` from the same interleaved stream. Whichever valid
+navigation solution arrives last becomes the current snapshot. This keeps GPS
+working if an overloaded receiver temporarily suppresses NMEA while NAV-PVT
+continues, without letting binary noise create a false fix.
+
 Default load-cell wiring in config:
 
 ```yaml

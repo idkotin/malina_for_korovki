@@ -4,7 +4,13 @@ import time
 import unittest
 from datetime import datetime, timezone
 
-from host_monitor.gps_reader import GpsCfg, GpsReader, _parse_nmea_line
+from host_monitor.gps_reader import (
+    GpsCfg,
+    GpsReader,
+    _GnssStreamParser,
+    _parse_nmea_line,
+    _parse_ubx_packet,
+)
 from host_monitor.models import Position
 
 
@@ -15,6 +21,33 @@ class FakeSerial:
 
     def reset_input_buffer(self) -> None:
         self.reset_calls += 1
+
+
+def make_nav_pvt_packet(
+    *,
+    lat: float = 52.4254,
+    lon: float = 85.7300,
+    speed_kmh: float = 7.2,
+    satellites: int = 12,
+    valid_fix: bool = True,
+) -> bytes:
+    payload = bytearray(92)
+    payload[4:6] = (2026).to_bytes(2, "little")
+    payload[6:11] = bytes((8, 19, 14, 7, 36))
+    payload[11] = 0x07
+    payload[20] = 3 if valid_fix else 0
+    payload[21] = 0x01 if valid_fix else 0
+    payload[23] = satellites
+    payload[24:28] = int(round(lon * 1e7)).to_bytes(4, "little", signed=True)
+    payload[28:32] = int(round(lat * 1e7)).to_bytes(4, "little", signed=True)
+    payload[60:64] = int(round(speed_kmh / 3.6 * 1000)).to_bytes(4, "little", signed=True)
+    header_and_payload = b"\x01\x07" + len(payload).to_bytes(2, "little") + payload
+    ck_a = 0
+    ck_b = 0
+    for value in header_and_payload:
+        ck_a = (ck_a + value) & 0xFF
+        ck_b = (ck_b + ck_a) & 0xFF
+    return b"\xb5\x62" + header_and_payload + bytes((ck_a, ck_b))
 
 
 def make_reader(*, max_fix_age_s: float = 3.0, validate_source_time: bool = True) -> GpsReader:
@@ -81,6 +114,48 @@ class NmeaParserTests(unittest.TestCase):
             position.source_utc_s,
             datetime(2026, 7, 18, 12, 35, 19, tzinfo=timezone.utc).timestamp(),
         )
+
+
+class UbxParserTests(unittest.TestCase):
+    def test_valid_nav_pvt_is_accepted(self) -> None:
+        position = _parse_ubx_packet(make_nav_pvt_packet())
+
+        self.assertIsNotNone(position)
+        assert position is not None
+        self.assertEqual(position.quality, 1)
+        self.assertEqual(position.satellites, 12)
+        self.assertAlmostEqual(position.lat or 0.0, 52.4254, places=6)
+        self.assertAlmostEqual(position.lon or 0.0, 85.73, places=6)
+        self.assertAlmostEqual(position.speed_kmh or 0.0, 7.2, places=3)
+
+    def test_bad_ubx_checksum_is_rejected(self) -> None:
+        packet = bytearray(make_nav_pvt_packet())
+        packet[-1] ^= 0xFF
+
+        self.assertIsNone(_parse_ubx_packet(bytes(packet)))
+
+    def test_invalid_nav_pvt_does_not_publish_coordinates(self) -> None:
+        position = _parse_ubx_packet(make_nav_pvt_packet(valid_fix=False))
+
+        self.assertIsNotNone(position)
+        assert position is not None
+        self.assertEqual(position.quality, 0)
+        self.assertIsNone(position.lat)
+        self.assertIsNone(position.lon)
+
+    def test_fragmented_mixed_stream_returns_ubx_and_nmea(self) -> None:
+        parser = _GnssStreamParser()
+        ubx = make_nav_pvt_packet()
+        nmea = b"$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A\r\n"
+        stream = b"garbage$noise" + ubx + nmea
+
+        positions = []
+        for offset in range(0, len(stream), 7):
+            positions.extend(parser.feed(stream[offset : offset + 7]))
+
+        self.assertEqual(len(positions), 2)
+        self.assertAlmostEqual(positions[0].lat or 0.0, 52.4254, places=6)
+        self.assertAlmostEqual(positions[1].lat or 0.0, 48.1173, places=4)
 
 
 class GpsFreshnessTests(unittest.TestCase):

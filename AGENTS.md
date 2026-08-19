@@ -255,6 +255,13 @@ devices. Direct UART deployments may disable absolute NMEA/system-clock
 comparison so GPS remains usable before NTP sync; monotonic arrival freshness
 must remain enforced.
 
+The M100 can interleave NMEA and binary UBX on the same saturated UART. The
+reader must frame both protocols and accept checksum-valid `UBX-NAV-PVT` as a
+first-class position source alongside GGA/RMC/GNS. Never treat arbitrary `$`
+bytes inside UBX payloads as NMEA, and never publish a NAV-PVT position unless
+`gnssFixOK`, a 2D-or-better `fixType`, valid coordinate ranges, and the UBX
+checksum all pass.
+
 It auto-detects candidate `/dev/ttyUSB*` ports and baud rates by looking for
 NMEA. It parses:
 

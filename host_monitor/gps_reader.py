@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import struct
 import threading
 import time
 from dataclasses import dataclass
@@ -185,6 +186,140 @@ def _parse_nmea_line(line: str, now_utc: datetime | None = None) -> Position | N
     return None
 
 
+def _ubx_checksum_valid(packet: bytes) -> bool:
+    if len(packet) < 8 or packet[:2] != b"\xb5\x62":
+        return False
+    payload_len = int.from_bytes(packet[4:6], "little")
+    if len(packet) != payload_len + 8:
+        return False
+    ck_a = 0
+    ck_b = 0
+    for value in packet[2:-2]:
+        ck_a = (ck_a + value) & 0xFF
+        ck_b = (ck_b + ck_a) & 0xFF
+    return packet[-2:] == bytes((ck_a, ck_b))
+
+
+def _parse_ubx_packet(packet: bytes) -> Position | None:
+    """Parse a checksum-verified UBX-NAV-PVT navigation solution."""
+    if not _ubx_checksum_valid(packet) or packet[2:4] != b"\x01\x07":
+        return None
+    payload = packet[6:-2]
+    if len(payload) != 92:
+        return None
+
+    fix_type = payload[20]
+    flags = payload[21]
+    num_sv = payload[23]
+    flags3 = int.from_bytes(payload[78:80], "little")
+    fix_ok = bool(flags & 0x01) and fix_type >= 2 and not bool(flags3 & 0x01)
+
+    source_utc_s: float | None = None
+    valid = payload[11]
+    if valid & 0x03 == 0x03:
+        try:
+            year = int.from_bytes(payload[4:6], "little")
+            month, day, hour, minute, second = payload[6:11]
+            nano = struct.unpack_from("<i", payload, 16)[0]
+            # datetime does not accept the leap-second value 60. The source
+            # timestamp is supplemental, so omit it for that one epoch.
+            if second <= 59:
+                base = datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+                source_utc_s = base.timestamp() + (nano / 1_000_000_000.0)
+        except (OverflowError, ValueError):
+            source_utc_s = None
+
+    if not fix_ok:
+        return Position(quality=0, satellites=num_sv, source_utc_s=source_utc_s)
+
+    lon_raw, lat_raw = struct.unpack_from("<ii", payload, 24)
+    lon = lon_raw * 1e-7
+    lat = lat_raw * 1e-7
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return Position(quality=0, satellites=num_sv, source_utc_s=source_utc_s)
+    ground_speed_mm_s = struct.unpack_from("<i", payload, 60)[0]
+    speed_kmh = max(0.0, ground_speed_mm_s / 1000.0 * 3.6)
+    return Position(
+        lat=lat,
+        lon=lon,
+        quality=1,
+        satellites=num_sv,
+        speed_kmh=speed_kmh,
+        source_utc_s=source_utc_s,
+    )
+
+
+class _GnssStreamParser:
+    """Frame interleaved UBX packets and NMEA lines from one UART stream."""
+
+    _UBX_SYNC = b"\xb5\x62"
+    _MAX_UBX_PAYLOAD = 4096
+    _MAX_NMEA_LINE = 1024
+    _MAX_BUFFER = 131072
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+
+    def feed(self, data: bytes) -> list[Position]:
+        if data:
+            self._buffer.extend(data)
+        if len(self._buffer) > self._MAX_BUFFER:
+            del self._buffer[: len(self._buffer) - self._MAX_BUFFER]
+
+        positions: list[Position] = []
+        while self._buffer:
+            ubx_at = self._buffer.find(self._UBX_SYNC)
+            nmea_at = self._buffer.find(b"$")
+            starts = [index for index in (ubx_at, nmea_at) if index >= 0]
+            if not starts:
+                # Preserve a possible first sync byte across chunk boundaries.
+                tail = self._buffer[-1:] if self._buffer[-1:] == b"\xb5" else b""
+                self._buffer.clear()
+                self._buffer.extend(tail)
+                break
+
+            start = min(starts)
+            if start:
+                del self._buffer[:start]
+
+            if self._buffer.startswith(self._UBX_SYNC):
+                if len(self._buffer) < 6:
+                    break
+                payload_len = int.from_bytes(self._buffer[4:6], "little")
+                if payload_len > self._MAX_UBX_PAYLOAD:
+                    del self._buffer[0]
+                    continue
+                packet_len = payload_len + 8
+                if len(self._buffer) < packet_len:
+                    break
+                packet = bytes(self._buffer[:packet_len])
+                del self._buffer[:packet_len]
+                position = _parse_ubx_packet(packet)
+                if position is not None:
+                    positions.append(position)
+                continue
+
+            newline_at = self._buffer.find(b"\n")
+            next_ubx = self._buffer.find(self._UBX_SYNC, 1)
+            next_nmea = self._buffer.find(b"$", 1)
+            next_starts = [index for index in (next_ubx, next_nmea) if index >= 0]
+            if next_starts and (newline_at < 0 or min(next_starts) < newline_at):
+                # The current '$' was binary payload noise, not a sentence.
+                del self._buffer[: min(next_starts)]
+                continue
+            if newline_at < 0:
+                if len(self._buffer) > self._MAX_NMEA_LINE:
+                    del self._buffer[0]
+                    continue
+                break
+            raw_line = bytes(self._buffer[: newline_at + 1])
+            del self._buffer[: newline_at + 1]
+            position = _parse_nmea_line(raw_line.decode("ascii", errors="ignore"))
+            if position is not None:
+                positions.append(position)
+        return positions
+
+
 def _merge_position(base: Position, update: Position) -> Position:
     return Position(
         lat=update.lat if update.lat is not None else base.lat,
@@ -305,7 +440,7 @@ class GpsReader:
         return merged
 
     def _open_serial(self) -> serial.Serial:
-        timeout = 1.0
+        timeout = 0.2
         bauds = [self._cfg.baud] if self._cfg.baud else self._cfg.baud_candidates
         last_err = None
         for port in self._candidate_ports():
@@ -313,14 +448,14 @@ class GpsReader:
                 try:
                     s = serial.Serial(port, b, timeout=timeout)
                     s.reset_input_buffer()
+                    parser = _GnssStreamParser()
                     t0 = time.monotonic()
                     found = False
                     while time.monotonic() - t0 < 2.0:
-                        raw = s.readline()
+                        raw = s.read(s.in_waiting or 1)
                         if not raw:
                             continue
-                        line = raw.decode("ascii", errors="ignore").strip()
-                        if _parse_nmea_line(line) is not None:
+                        if parser.feed(raw):
                             found = True
                             break
                     if found:
@@ -331,7 +466,7 @@ class GpsReader:
                 except Exception as e:
                     last_err = str(e)
                     continue
-        raise RuntimeError(f"failed to detect GPS port/baud: {last_err or 'no NMEA'}")
+        raise RuntimeError(f"failed to detect GPS port/baud: {last_err or 'no supported NMEA/UBX navigation data'}")
 
     def _run(self) -> None:
         backoff = 1.0
@@ -339,6 +474,7 @@ class GpsReader:
             try:
                 with self._open_serial() as ser:
                     backoff = 1.0
+                    parser = _GnssStreamParser()
                     while not self._stop.is_set():
                         if self._discard_excess_backlog(ser):
                             # A live 10 Hz receiver will provide a replacement
@@ -352,19 +488,16 @@ class GpsReader:
                         latest_fix_source_utc_s: float | None = None
                         latest_speed_monotonic: float | None = None
                         while time.monotonic() < deadline:
-                            raw = ser.readline()
+                            raw = ser.read(ser.in_waiting or 1)
                             if not raw:
                                 continue
                             got_any = True
                             line_monotonic = time.monotonic()
                             with self._lock:
                                 self._last_line_monotonic = line_monotonic
-                            line = raw.decode("ascii", errors="ignore").strip()
-                            pos = _parse_nmea_line(line)
-                            if pos is not None:
+                            for pos in parser.feed(raw):
                                 # Keep the freshest coordinates from the latest sentence in this read window,
-                                # but preserve supplemental fields (for example satellites from GGA/GNS)
-                                # when a newer sentence such as RMC does not carry them.
+                                # but preserve supplemental fields when a newer NMEA or UBX message omits them.
                                 latest_pos = pos if latest_pos is None else _merge_position(latest_pos, pos)
                                 if pos.speed_kmh is not None:
                                     latest_speed_monotonic = line_monotonic
