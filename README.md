@@ -112,7 +112,7 @@ pip install .
 Run manually with the venv Python:
 
 ```bash
-/opt/host-monitor/.venv/bin/python -m host_monitor.main --config /opt/host-monitor/config.yaml
+/opt/host-monitor/.venv/bin/python -m host_monitor.main --config /etc/host-monitor/config.yaml
 ```
 
 Install the Waveshare ADS1263 Python library:
@@ -131,7 +131,14 @@ weight:
 
 ## 3) Configure
 
-Edit `/opt/host-monitor/config.yaml`.
+The tracked `/opt/host-monitor/config.yaml` is a public example. Install the
+service once, then edit only the live config outside Git:
+
+```bash
+cd /opt/host-monitor
+sudo bash ./systemd/install-host-monitor.sh
+sudoedit /etc/host-monitor/config.yaml
+```
 
 Important fields:
 
@@ -589,39 +596,17 @@ Workflow:
 - Press Enter when the script asks to continue, then enter the new known total weight in kg
 - The script computes and saves both `offset` and `scale` from those two measured points
 
-If `config.yaml` is a machine-local live config, keep it out of the normal update flow:
+Production configuration is stored at `/etc/host-monitor/config.yaml` and is
+never changed by Git. After the one-time migration, all normal device updates
+use the checked-in updater:
 
 ```bash
 cd /opt/host-monitor
-git update-index --skip-worktree config.yaml
+./update-device.sh
 ```
 
-To let Git manage it again later:
-
-```bash
-cd /opt/host-monitor
-git update-index --no-skip-worktree config.yaml
-```
-
-If `git pull` is already blocked by a local `config.yaml`, keep your live config and update like this:
-
-```bash
-cd /opt/host-monitor
-cp config.yaml config.yaml.bak-$(date +%F-%H%M%S)
-git stash push -m local-config -- config.yaml
-git pull
-git stash pop
-```
-
-If `stash pop` leaves conflict markers like `<<<<<<<`, restore your known-good local config from backup and resolve the index:
-
-```bash
-cd /opt/host-monitor
-cp config.yaml.bak-YYYY-MM-DD-HHMMSS config.yaml
-git add config.yaml
-git restore --staged config.yaml
-git update-index --skip-worktree config.yaml
-```
+Do not use `git update-index --skip-worktree` or `--assume-unchanged` for live
+configuration. Those flags hide divergence until a later pull fails.
 
 Calibration is stored in:
 

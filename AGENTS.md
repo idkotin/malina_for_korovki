@@ -19,7 +19,8 @@ C:\Users\Windows\projects\Korovki
 - CLI entrypoint: `host-monitor = host_monitor.main:main`
 - Calibration CLI: `host-monitor-calibrate = host_monitor.calibrate:main`
 - Buffered events inspection CLI: `host-monitor-events = host_monitor.events_dump:main`
-- Main config: `config.yaml`
+- Public/default config: `config.yaml`
+- Production config (outside Git): `/etc/host-monitor/config.yaml`
 - systemd unit: `systemd/host-monitor.service`
 - Remote-access scripts: `remote_access/amnezia/`
 
@@ -32,8 +33,32 @@ Runtime target is Raspberry Pi OS, normally installed at:
 The systemd service runs:
 
 ```bash
-/opt/host-monitor/.venv/bin/host-monitor --config /opt/host-monitor/config.yaml
+/opt/host-monitor/.venv/bin/host-monitor --config /etc/host-monitor/config.yaml
 ```
+
+## Raspberry Pi Update Procedure
+
+Never edit the tracked `/opt/host-monitor/config.yaml` on a production Pi and
+never hide it with `assume-unchanged` or `skip-worktree`. The live settings are
+kept at `/etc/host-monitor/config.yaml`, outside the repository, so source
+updates cannot overwrite or conflict with them.
+
+Normal updates are performed only with:
+
+```bash
+cd /opt/host-monitor
+./update-device.sh
+```
+
+The updater accepts untracked backup/build files, but refuses to overwrite
+tracked source changes. It pulls `master` with `--ff-only`, refreshes the
+editable Python installation, installs the current systemd unit, preserves the
+external live config, and restarts the service.
+
+For the one-time migration from an older checkout, first run
+`sudo bash ./systemd/install-host-monitor.sh` while the known-good live
+`config.yaml` is still present. After verifying `/etc/host-monitor/config.yaml`,
+the tracked checkout copy may be restored with `git restore config.yaml`.
 
 ## What The Device Does
 
@@ -47,7 +72,7 @@ The Raspberry Pi "host" gathers and sends machine telemetry:
 - CPU temperature.
 
 Normal telemetry and modem events go to separate HTTP endpoints configured in
-`config.yaml`:
+the live `/etc/host-monitor/config.yaml`:
 
 ```yaml
 send:
