@@ -53,7 +53,9 @@ cd /opt/host-monitor
 The updater accepts untracked backup/build files, but refuses to overwrite
 tracked source changes. It pulls `master` with `--ff-only`, refreshes the
 editable Python installation, installs the current systemd unit, preserves the
-external live config, and restarts the service.
+external live config, and always restarts the service. Using only
+`systemctl enable --now` is insufficient because it does not restart an
+already-active process after Python source changes.
 
 For the one-time migration from an older checkout, first run
 `sudo bash ./systemd/install-host-monitor.sh` while the known-good live

@@ -18,7 +18,8 @@ fi
 .venv/bin/python -m pip install -e .
 
 sudo bash ./systemd/install-host-monitor.sh
-sudo systemctl enable --now host-monitor.service
+sudo systemctl enable host-monitor.service
+sudo systemctl restart host-monitor.service
 
 echo "Update complete. Live config was not modified."
 systemctl --no-pager --full status host-monitor.service
