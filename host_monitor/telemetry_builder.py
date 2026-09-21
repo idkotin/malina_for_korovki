@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from host_monitor.models import LteInfo, Position, Telemetry, Weight
 
+RAW_WEIGHT_INVALID_BELOW_KG = -2000.0
+
 
 def utc_now_iso_no_tz() -> str:
     # UTC timestamp without timezone suffix (as requested by backend format).
@@ -39,6 +41,7 @@ def build_telemetry(
     speed_kmh = position.speed_kmh if gps_valid and position.speed_kmh is not None else 0.0
     weight_kg = weight.weight if weight.weight is not None else 0.0
     raw_weight_kg = weight.raw if weight.raw is not None else 0.0
+    weight_valid = weight_valid and raw_weight_kg >= RAW_WEIGHT_INVALID_BELOW_KG
 
     lte_rssi = lte.rssi_dbm if lte.rssi_dbm is not None else 0
     lte_access_tech = lte.access_tech if lte.access_tech is not None else "0"

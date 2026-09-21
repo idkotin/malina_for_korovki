@@ -74,6 +74,22 @@ class TelemetrySnapshotTests(unittest.TestCase):
         self.assertFalse(packet.gps_valid)
         self.assertFalse(packet.weight_valid)
 
+    def test_raw_weight_below_minus_2000_is_invalid(self) -> None:
+        packet = build_snapshot(
+            position=Position(lat=55.1, lon=82.8, quality=1),
+            weight=Weight(weight=15.0, raw=-2000.1),
+        )
+
+        self.assertFalse(packet.weight_valid)
+
+    def test_raw_weight_at_minus_2000_remains_valid(self) -> None:
+        packet = build_snapshot(
+            position=Position(lat=55.1, lon=82.8, quality=1),
+            weight=Weight(weight=15.0, raw=-2000.0),
+        )
+
+        self.assertTrue(packet.weight_valid)
+
     def test_resend_preserves_snapshot_values_and_timestamp(self) -> None:
         packet = build_snapshot(
             position=Position(lat=55.1, lon=82.8, quality=1, speed_kmh=7.0),
