@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from host_monitor.models import Level
 
@@ -59,6 +59,7 @@ class GpsCfg(BaseModel):
 
 class WeightCfg(BaseModel):
     enabled: bool = False
+    require_calibration: bool = False
     driver: str = "ads1263"
     calibration_path: str = "./data/scale_calibration.json"
     simulate: bool = True
@@ -152,6 +153,37 @@ class LoggingCfg(BaseModel):
     backup_count: int = 3
 
 
+class LocalScaleCfg(BaseModel):
+    enabled: bool = False
+    listen: str = '127.0.0.1'
+    port: int = Field(default=8765, ge=0, le=65535)
+
+
+class PanelCfg(BaseModel):
+    enabled: bool = False
+    state_path: str = './data/panel.json'
+    data_pin: int = 5
+    clock_pin: int = 6
+    latch_pin: int = 13
+    blank_pin: int = 19
+    minus_pin: int = 20
+    plus_pin: int = 21
+    power_pin: int = 16
+    net_pin: int = 26
+    admin_pins: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def validate_hardware(self):
+        pins = [getattr(self, name) for name in ('data_pin', 'clock_pin', 'latch_pin', 'blank_pin',
+                                                'minus_pin', 'plus_pin', 'power_pin', 'net_pin')]
+        if len(set(pins)) != len(pins) or any(p not in range(2, 28) or p in (7, 8, 9, 10, 11, 14, 15, 17, 18, 22) for p in pins):
+            raise ValueError('Panel GPIO conflicts with ADC/UART or is duplicated')
+        if self.enabled and (set(self.admin_pins) != {'zero', 'span'} or
+            len(set(self.admin_pins.values())) != 2 or any(len(p) != 4 or not p.isascii() or not p.isdigit() for p in self.admin_pins.values())):
+            raise ValueError('Configure distinct four-digit zero/span PINs in the live config')
+        return self
+
+
 class AppCfg(BaseModel):
     device: DeviceCfg
     send: SendCfg
@@ -164,6 +196,14 @@ class AppCfg(BaseModel):
     sms_reboot: SmsRebootCfg = Field(default_factory=SmsRebootCfg)
     auto_reboot: AutoRebootCfg = Field(default_factory=AutoRebootCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
+    local_scale: LocalScaleCfg = Field(default_factory=LocalScaleCfg)
+    panel: PanelCfg = Field(default_factory=PanelCfg)
+
+    @model_validator(mode='after')
+    def standalone_recovery(self):
+        if self.weight.require_calibration and self.auto_reboot.enabled:
+            raise ValueError('Terminal-off reboot guard is incompatible with standalone scales')
+        return self
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:

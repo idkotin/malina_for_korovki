@@ -1,0 +1,110 @@
+# Enable panel and configure private PINs after wiring checks.
+device:
+  id: Hozain_01
+send:
+  url: https://vi-korm.ru/api/telemetry/host
+  interval_s: 0.5
+  timeout_s: 2.0
+  max_batch: 20
+  idle_sleep_enabled: false
+  idle_after_s: 1800.0
+  idle_interval_s: 120.0
+  movement_confirm_s: 5.0
+  movement_speed_kmh: 2.0
+events:
+  url: http://127.0.0.1:8000/modem-events
+  timeout_s: 5.0
+  max_batch: 50
+buffer:
+  sqlite_path: ./data/buffer.sqlite3
+  max_rows: 200000
+  max_rows_events: 50000
+gps:
+  enabled: true
+  port: /dev/serial0
+  port_candidates: []
+  baud: 115200
+  baud_candidates:
+  - 9600
+  - 19200
+  - 38400
+  - 57600
+  - 115200
+  max_fix_age_s: 1.0
+  max_serial_backlog_bytes: 4096
+  validate_source_time: false
+weight:
+  enabled: true
+  driver: ads1263
+  calibration_path: ./data/standalone-calibration.json
+  simulate: false
+  waveshare_path: /opt/High-Pricision_AD_HAT/python
+  frontend: adc2
+  reference_mode: internal
+  ref_pos: 0
+  ref_neg: 1
+  channel_pos: 0
+  channel_neg: 1
+  sample_count: 8
+  adc_rate: ADS1263_20SPS
+  adc2_rate: ADS1263_ADC2_100SPS
+  trim_fraction: 0.2
+  smoothing_alpha: 0.5
+  fast_smoothing_alpha: 0.8
+  fast_change_threshold_kg: 30.0
+  zero_deadband_kg: 0
+  median_window: 3
+  min_ref_abs: 1.0e-09
+  invalid_below_kg: -9999.0
+  invalid_above_kg: 99999.0
+  require_calibration: true
+wifi:
+  enabled: false
+  hostapd_cli: hostapd_cli
+  ap_interface: wlan0
+  scan_interval_s: 1.0
+  max_snapshot_age_s: 2.0
+lte:
+  enabled: false
+  mmcli: mmcli
+  at_ports:
+  - /dev/ttyUSB0
+  - /dev/ttyUSB2
+  - /dev/ttyUSB3
+  at_baud: 115200
+  events_enabled: false
+  events_port: null
+  sim_failure_recovery_enabled: false
+  sim_failure_poll_interval_s: 30
+  sim_failure_confirm_s: 90
+  sim_failure_reset_cooldown_s: 1800
+  sim_failure_reset_window_s: 21600
+  sim_failure_max_resets: 3
+  sim_failure_reset_settle_s: 20
+sms_reboot:
+  enabled: false
+  allowed_number: null
+  command: /reboot
+auto_reboot:
+  enabled: false
+  telemetry_inactive_s: 900.0
+  terminal_off_below_raw_kg: -1000.0
+  terminal_off_confirm_s: 30.0
+  max_weight_age_s: 10.0
+  healthy_success_max_age_s: 10.0
+  healthy_reset_confirm_s: 60.0
+  state_path: ./data/auto_reboot_state.json
+logging:
+  dir: ./logs
+  file: host_monitor.log
+  level: INFO
+  max_bytes: 5000000
+  backup_count: 3
+local_scale:
+  enabled: true
+  listen: 0.0.0.0
+  port: 8765
+panel:
+  enabled: false
+  state_path: ./data/panel.json
+  admin_pins: {}

@@ -5,6 +5,7 @@ import queue
 import random
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -28,6 +29,13 @@ class WeightSampler:
         self._updated_monotonic: float | None = None
         self._read_duration_s: float | None = None
         self._last_error: str | None = None
+        self._boot_id = uuid.uuid4().hex
+        self._sequence = 0
+        self._timestamp_ms = 0
+        self._commands = queue.Queue(maxsize=1)
+        self._command_error = None
+        self._calibration_id = getattr(reader, 'calibration_id', 'legacy')
+        self._calibrated = getattr(reader, 'calibrated', True)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -45,6 +53,16 @@ class WeightSampler:
         while not self._stop.is_set():
             started = time.monotonic()
             try:
+                try:
+                    action, value = self._commands.get_nowait()
+                except queue.Empty:
+                    action = None
+                if action:
+                    try:
+                        self._reader.panel_calibrate(action, value)
+                        self._command_error = None
+                    except Exception as exc:
+                        self._command_error = str(exc)
                 value = self._reader.read_weight()
                 error = None
             except Exception as exc:
@@ -57,6 +75,23 @@ class WeightSampler:
                 self._updated_monotonic = finished
                 self._read_duration_s = finished - started
                 self._last_error = error
+                self._sequence += 1
+                self._timestamp_ms = int(time.time() * 1000)
+                self._calibration_id = getattr(self._reader, 'calibration_id', 'legacy')
+                self._calibrated = getattr(self._reader, 'calibrated', True)
+            self._stop.wait(max(0.005, .5 - (time.monotonic() - started)))
+
+    def command(self, action: str, value: float = 0):
+        if action not in ('zero', 'span'):
+            raise ValueError('Unknown calibration command')
+        self._commands.put_nowait((action, value))
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            age = None if self._updated_monotonic is None else max(0, time.monotonic() - self._updated_monotonic)
+            return dict(weight=self._weight.model_copy(deep=True), age_s=age,
+                        timestamp_ms=self._timestamp_ms, packet_id=f'{self._boot_id}:{self._sequence}',
+                        calibration_id=self._calibration_id, calibrated=self._calibrated)
 
     def latest(self) -> Weight:
         with self._lock:
@@ -70,6 +105,7 @@ class WeightSampler:
                 "read_duration_s": self._read_duration_s,
                 "last_error": self._last_error,
                 "running": bool(self._thread and self._thread.is_alive()),
+                "command_error": self._command_error,
             }
 
 

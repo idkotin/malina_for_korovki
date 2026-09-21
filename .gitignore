@@ -4,6 +4,8 @@ __pycache__/
 *.pyd
 .Python
 .venv/
+.venv-tablet/
+*.egg-info/
 venv/
 env/
 

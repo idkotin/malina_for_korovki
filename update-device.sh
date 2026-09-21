@@ -10,7 +10,8 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 
-git pull --ff-only origin master
+branch="$(git symbolic-ref --quiet --short HEAD)" || { echo 'Checkout a branch first' >&2; exit 1; }
+git pull --ff-only origin "${branch}"
 
 if [[ ! -x .venv/bin/python ]]; then
   python3 -m venv .venv

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "host-monitor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Raspberry Pi telemetry sender (GPS/LTE/weight/Wi-Fi clients) with SQLite buffering."
 readme = "README.md"
 requires-python = ">=3.10"

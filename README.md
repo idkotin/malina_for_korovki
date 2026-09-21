@@ -1,5 +1,13 @@
 # host-monitor (Raspberry Pi)
 
+## Версия with-tablet
+
+Полная инструкция новой самостоятельной весовой системы: **[WITH_TABLET.md](WITH_TABLET.md)**.
+Она включает распайку SA23-11SURKWA/TLC5947, кнопки, питание, калибровку,
+установку Pi/Android/server и откат. Профиль `config.with-tablet.yaml` выбирается
+явно; текущую production-конфигурацию не заменять без сохранения её параметров.
+Ниже описана также историческая схема со штатным терминалом.
+
 Russian version: [README.ru.md](./README.ru.md)
 
 Telemetry client for Raspberry Pi 4 + an independent UART GNSS receiver + Waveshare ADS1263.

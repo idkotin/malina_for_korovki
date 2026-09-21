@@ -18,6 +18,8 @@ from host_monitor.system_info import read_cpu_temp_c
 from host_monitor.telemetry_builder import build_telemetry
 from host_monitor.weight_reader import WeightCfg as WeightCfgDC
 from host_monitor.weight_reader import WeightReader
+from host_monitor.local_scale import LocalWeightServer, measurement
+from host_monitor.scale_panel import ScalePanel
 from host_monitor.wifi_clients import WifiCfg as WifiCfgDC
 from host_monitor.wifi_clients import get_wifi_clients
 from host_monitor.workers import BufferFlusher, OutboundDispatcher, TelemetryOutboxWorker, WeightSampler, WifiMonitor
@@ -30,6 +32,7 @@ def _build_weight_reader(cfg) -> WeightReader:
     return WeightReader(
         WeightCfgDC(
             enabled=cfg.weight.enabled,
+            require_calibration=cfg.weight.require_calibration,
             driver=cfg.weight.driver,
             calibration_path=cfg.weight.calibration_path,
             simulate=cfg.weight.simulate,
@@ -83,6 +86,17 @@ def main(argv: list[str] | None = None) -> None:
 
     weight_sampler = WeightSampler(_build_weight_reader(cfg))
     weight_sampler.start()
+    local_server = None
+    panel = None
+    if cfg.local_scale.enabled:
+        local_server = LocalWeightServer(weight_sampler, cfg.device.id, cfg.local_scale.listen, cfg.local_scale.port)
+        local_server.start()
+    if cfg.panel.enabled:
+        try:
+            panel = ScalePanel(cfg.panel, weight_sampler, cfg.device.id)
+            panel.start()
+        except Exception:
+            log.exception('Panel initialization failed; local weight service remains available')
 
     wifi_cfg = WifiCfgDC(
         enabled=cfg.wifi.enabled,
@@ -195,6 +209,9 @@ def main(argv: list[str] | None = None) -> None:
             # work.  The builder immediately timestamps this GPS/weight pair.
             pos = gps.latest()
             weight = weight_sampler.latest()
+            weight_snapshot = weight_sampler.snapshot()
+            if not weight_snapshot['calibrated'] or weight_snapshot['age_s'] is None or weight_snapshot['age_s'] > 3:
+                weight = weight.model_copy(update={'weight': None, 'raw': None})
             wifi_clients, wifi_err = wifi_monitor.latest()
             coordinates_in_range = (
                 pos.lat is not None
@@ -227,6 +244,8 @@ def main(argv: list[str] | None = None) -> None:
                 events_reader_ok=events_reader_ok,
             )
             payload = telemetry.model_dump(mode="json")
+            if cfg.local_scale.enabled:
+                payload['scale_measurement'] = measurement(weight_sampler, cfg.device.id)
 
             now = time.monotonic()
             movement_speed_threshold = max(0.0, float(cfg.send.movement_speed_kmh))
@@ -313,6 +332,10 @@ def main(argv: list[str] | None = None) -> None:
             # approximately send.interval_s.
             time.sleep(max(0.0, min(current_send_interval_s, cfg.send.interval_s) - loop_duration_s))
     finally:
+        if panel:
+            panel.stop()
+        if local_server:
+            local_server.stop()
         for worker in (telemetry_sender, events_dispatcher, events_flusher):
             worker.stop()
         weight_sampler.stop()

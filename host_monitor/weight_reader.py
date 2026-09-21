@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 import json
+import hashlib
 import logging
 import math
 import random
@@ -43,12 +44,14 @@ class WeightCfg:
     min_ref_abs: float = 1e-9
     invalid_below_kg: float | None = -1000.0
     invalid_above_kg: float | None = None
+    require_calibration: bool = False
 
 
 @dataclass
 class ScaleCalibration:
     offset: float = 0.0
     scale: float = 1.0  # kg per raw_unit
+    confirmed: bool = False
 
 
 def load_calibration(path: str) -> ScaleCalibration:
@@ -57,7 +60,10 @@ def load_calibration(path: str) -> ScaleCalibration:
         return ScaleCalibration()
     try:
         obj = json.loads(p.read_text(encoding="utf-8"))
-        return ScaleCalibration(offset=float(obj.get("offset", 0.0)), scale=float(obj.get("scale", 1.0)))
+        offset, scale = float(obj['offset']), float(obj['scale'])
+        if not math.isfinite(offset) or not math.isfinite(scale) or scale == 0:
+            raise ValueError('Invalid calibration')
+        return ScaleCalibration(offset=offset, scale=scale, confirmed=obj.get('confirmed') is True)
     except Exception:
         return ScaleCalibration()
 
@@ -65,7 +71,8 @@ def load_calibration(path: str) -> ScaleCalibration:
 def save_calibration(path: str, cal: ScaleCalibration) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"offset": cal.offset, "scale": cal.scale}, ensure_ascii=False, indent=2), encoding="utf-8")
+    from host_monitor.local_scale import atomic_json
+    atomic_json(str(p), {'offset': cal.offset, 'scale': cal.scale, 'confirmed': cal.confirmed})
 
 
 class WeightReader:
@@ -96,6 +103,40 @@ class WeightReader:
 
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
+
+    @property
+    def calibrated(self):
+        return not self._cfg.require_calibration or self._cal.confirmed
+
+    @property
+    def calibration_id(self):
+        return hashlib.sha256(repr((self._cal.offset, self._cal.scale, self._cfg.frontend,
+                                    self._cfg.reference_mode, self._cfg.channel_pos,
+                                    self._cfg.channel_neg, self._cfg.ref_pos,
+                                    self._cfg.ref_neg)).encode()).hexdigest()[:24]
+
+    def panel_calibrate(self, action, value):
+        if not self._cfg.enabled or self._cfg.simulate:
+            raise ValueError('Calibration needs enabled real sensors')
+        samples = [self.read_raw() for _ in range(5)]
+        raw = statistics.median(samples)
+        if not all(math.isfinite(x) for x in samples) or max(samples) - min(samples) > max(10, abs(raw) * .002):
+            raise ValueError('Unstable calibration load')
+        if action == 'zero':
+            self._pending_zero = raw
+            # Existing valid calibration stays intact until known-load confirmation.
+        elif action == 'span':
+            if not hasattr(self, '_pending_zero'):
+                raise ValueError('Capture empty machine zero first')
+            delta = raw - self._pending_zero
+            if value <= 0 or abs(delta) < 10:
+                raise ValueError('Known load too small')
+            cal = ScaleCalibration(self._pending_zero, value / delta, True)
+            save_calibration(self._cfg.calibration_path, cal)
+            self._cal = cal
+            self._filtered_weight = None
+            self._recent_weights.clear()
+            del self._pending_zero
 
     def prepare(self) -> None:
         self._init_ads1263()
