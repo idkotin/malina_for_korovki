@@ -8,11 +8,13 @@ import math
 import random
 import statistics
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
 from host_monitor.models import Weight
+from host_monitor.weight_display import WeightDisplay
 
 
 log = logging.getLogger("host_monitor.weight")
@@ -100,9 +102,19 @@ class WeightReader:
         self._invalid_weight_reads = 0
         self._reseed_after_invalid = False
         self._reseed_valid_reads = 0
+        self._display = WeightDisplay()
+        self._last_read_time = None
+
+    def _reset_filter(self):
+        self._filtered_weight = None
+        self._recent_weights.clear()
+        self._display.reset()
+        self._reseed_after_invalid = False
+        self._reseed_valid_reads = 0
 
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
+        self._reset_filter()
 
     @property
     def calibrated(self):
@@ -134,8 +146,7 @@ class WeightReader:
             cal = ScaleCalibration(self._pending_zero, value / delta, True)
             save_calibration(self._cfg.calibration_path, cal)
             self._cal = cal
-            self._filtered_weight = None
-            self._recent_weights.clear()
+            self._reset_filter()
             del self._pending_zero
 
     def prepare(self) -> None:
@@ -363,10 +374,15 @@ class WeightReader:
             return Weight(weight=None)
         try:
             raw = self.read_raw()
+            now = time.monotonic()
+            if self._last_read_time is not None and now - self._last_read_time > 3:
+                self._reset_filter()
+            self._last_read_time = now
             value = (raw - self._cal.offset) * self._cal.scale
             if not self._is_valid_weight_value(float(value)):
                 self._filtered_weight = None
                 self._recent_weights.clear()
+                self._display.reset()
                 self._invalid_weight_reads += 1
                 self._reseed_after_invalid = True
                 self._reseed_valid_reads = 0
@@ -380,14 +396,14 @@ class WeightReader:
                 self._reseed_valid_reads += 1
                 if self._reseed_valid_reads == 1:
                     self._filtered_weight = float(value)
-                    return Weight(weight=float(value), raw=float(value))
+                    return Weight(weight=self._display.update(float(value)), raw=float(value))
 
                 median_value = float(statistics.median(self._recent_weights))
                 self._filtered_weight = median_value
                 if self._reseed_valid_reads >= 2:
                     self._reseed_after_invalid = False
                     self._reseed_valid_reads = 0
-                return Weight(weight=median_value, raw=float(value))
+                return Weight(weight=self._display.update(median_value), raw=float(value))
 
             alpha = max(0.0, min(1.0, float(self._cfg.smoothing_alpha)))
             fast_alpha = max(alpha, min(1.0, float(self._cfg.fast_smoothing_alpha)))
@@ -407,14 +423,16 @@ class WeightReader:
             if abs(display_weight) <= zero_deadband and abs(float(median_value)) <= zero_deadband:
                 display_weight = 0.0
                 self._filtered_weight = 0.0
-            return Weight(weight=display_weight, raw=float(value))
+            return Weight(weight=self._display.update(display_weight), raw=float(value))
         except Exception as e:
+            self._reset_filter()
             log.warning("weight read failed: %s", e)
             return Weight(weight=None)
 
     def tare(self) -> float:
         raw = self.read_raw()
         self._cal.offset = float(raw)
+        self._reset_filter()
         save_calibration(self._cfg.calibration_path, self._cal)
         return self._cal.offset
 
@@ -426,5 +444,6 @@ class WeightReader:
         if abs(delta) < 1e-9:
             raise RuntimeError("calibration delta too small; check load is applied")
         self._cal.scale = float(known_kg / delta)
+        self._reset_filter()
         save_calibration(self._cfg.calibration_path, self._cal)
         return self._cal.scale

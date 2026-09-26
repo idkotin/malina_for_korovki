@@ -1,5 +1,7 @@
 # Стенд Raspberry Pi, 26.09.2026
 
+Актуализация 27.09: пользователь включил панель и подтвердил работу меню/кнопок; venv использует системный gpiozero через include-system-site-packages=true. Новая фильтрация и её установка: [WEIGHT_FILTER_2026-09-27.md](WEIGHT_FILTER_2026-09-27.md). Этот код ещё необходимо установить на Pi вручную: удалённого доступа сейчас нет.
+
 По явному поручению пользователя установлен `a8916c5`, ветка `with-tablet`, штатным `update-device.sh`. Исходный commit `0c16d7a`; конфигурация, systemd и data сохранены в `/opt/host-monitor/backups/before-tablet-20260926-234656` (приватный каталог). SQLite quick_check = ok. Старые калибровка и очередь не удалялись.
 
 Рабочая конфигурация `/etc/host-monitor/config.yaml`: Hozain_01, HTTPS vi-korm.ru, интервал 0.5 с, standalone calibration required, simulation=false. GPS сохранён; LTE/SMS events и auto reboot выключены, панель выключена до аппаратной проверки. Новая калибровка отдельно от старой, не подтверждена без тензодатчиков.

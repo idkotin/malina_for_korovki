@@ -27,8 +27,8 @@ def atomic_json(path: str, value: dict) -> None:
             os.close(fd)
 
 
-def measurement(sampler, device_id: str) -> dict:
-    snap = sampler.snapshot()
+def measurement(sampler, device_id: str, snapshot=None) -> dict:
+    snap = sampler.snapshot() if snapshot is None else snapshot
     value = snap['weight'].weight
     valid = (value is not None and math.isfinite(value) and snap['age_s'] is not None
              and snap['age_s'] <= 3 and snap['calibrated'])

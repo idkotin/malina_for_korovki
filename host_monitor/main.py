@@ -208,8 +208,8 @@ def main(argv: list[str] | None = None) -> None:
             # Take the current device snapshot only after potentially slow LTE
             # work.  The builder immediately timestamps this GPS/weight pair.
             pos = gps.latest()
-            weight = weight_sampler.latest()
             weight_snapshot = weight_sampler.snapshot()
+            weight = weight_snapshot['weight']
             if not weight_snapshot['calibrated'] or weight_snapshot['age_s'] is None or weight_snapshot['age_s'] > 3:
                 weight = weight.model_copy(update={'weight': None, 'raw': None})
             wifi_clients, wifi_err = wifi_monitor.latest()
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             payload = telemetry.model_dump(mode="json")
             if cfg.local_scale.enabled:
-                payload['scale_measurement'] = measurement(weight_sampler, cfg.device.id)
+                payload['scale_measurement'] = measurement(weight_sampler, cfg.device.id, weight_snapshot)
 
             now = time.monotonic()
             movement_speed_threshold = max(0.0, float(cfg.send.movement_speed_kmh))
