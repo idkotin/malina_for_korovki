@@ -44,6 +44,7 @@ def _build_weight_reader(config_path: str) -> tuple[WeightReader, str]:
         sample_count=cfg.weight.sample_count,
         adc_rate=cfg.weight.adc_rate,
         adc2_rate=cfg.weight.adc2_rate,
+        adc2_gain=cfg.weight.adc2_gain,
         trim_fraction=cfg.weight.trim_fraction,
         smoothing_alpha=cfg.weight.smoothing_alpha,
         fast_smoothing_alpha=cfg.weight.fast_smoothing_alpha,
@@ -106,7 +107,7 @@ def main(argv: list[str] | None = None) -> None:
 
     scale = float((known_kg_2 - known_kg_1) / (raw_2 - raw_1))
     offset = float(raw_1 - (known_kg_1 / scale))
-    cal = ScaleCalibration(offset=offset, scale=scale)
+    cal = ScaleCalibration(offset=offset, scale=scale, adc2_gain=wr._cfg.adc2_gain)
     save_calibration(calibration_path, cal)
     print(f"Calibration saved: offset={cal.offset} scale={cal.scale}")
 

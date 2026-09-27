@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -83,6 +83,7 @@ class WeightCfg(BaseModel):
     sample_count: int = 80
     adc_rate: str = "ADS1263_20SPS"
     adc2_rate: str = "ADS1263_ADC2_100SPS"
+    adc2_gain: Literal[1, 2, 4, 8, 16, 32, 64, 128] = 1
     # Filtering: trim extremes before averaging ratio.
     trim_fraction: float = 0.2
     smoothing_alpha: float = 0.12

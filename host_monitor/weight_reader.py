@@ -37,6 +37,7 @@ class WeightCfg:
     sample_count: int
     adc_rate: str
     adc2_rate: str
+    adc2_gain: int = 1
     trim_fraction: float = 0.1
     smoothing_alpha: float = 0.12
     fast_smoothing_alpha: float = 0.45
@@ -54,6 +55,7 @@ class ScaleCalibration:
     offset: float = 0.0
     scale: float = 1.0  # kg per raw_unit
     confirmed: bool = False
+    adc2_gain: int = 1
 
 
 def load_calibration(path: str) -> ScaleCalibration:
@@ -65,7 +67,8 @@ def load_calibration(path: str) -> ScaleCalibration:
         offset, scale = float(obj['offset']), float(obj['scale'])
         if not math.isfinite(offset) or not math.isfinite(scale) or scale == 0:
             raise ValueError('Invalid calibration')
-        return ScaleCalibration(offset=offset, scale=scale, confirmed=obj.get('confirmed') is True)
+        return ScaleCalibration(offset=offset, scale=scale, confirmed=obj.get('confirmed') is True,
+                                adc2_gain=int(obj.get('adc2_gain', 1)))
     except Exception:
         return ScaleCalibration()
 
@@ -74,7 +77,8 @@ def save_calibration(path: str, cal: ScaleCalibration) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     from host_monitor.local_scale import atomic_json
-    atomic_json(str(p), {'offset': cal.offset, 'scale': cal.scale, 'confirmed': cal.confirmed})
+    atomic_json(str(p), {'offset': cal.offset, 'scale': cal.scale, 'confirmed': cal.confirmed,
+                         'adc2_gain': cal.adc2_gain})
 
 
 class WeightReader:
@@ -118,14 +122,18 @@ class WeightReader:
 
     @property
     def calibrated(self):
-        return not self._cfg.require_calibration or self._cal.confirmed
+        gain_matches = self._cfg.frontend.lower() != 'adc2' or self._cal.adc2_gain == self._cfg.adc2_gain
+        return gain_matches and (not self._cfg.require_calibration or self._cal.confirmed)
 
     @property
     def calibration_id(self):
-        return hashlib.sha256(repr((self._cal.offset, self._cal.scale, self._cfg.frontend,
+        identity = (self._cal.offset, self._cal.scale, self._cfg.frontend,
                                     self._cfg.reference_mode, self._cfg.channel_pos,
                                     self._cfg.channel_neg, self._cfg.ref_pos,
-                                    self._cfg.ref_neg)).encode()).hexdigest()[:24]
+                                    self._cfg.ref_neg)
+        if self._cfg.frontend.lower() == 'adc2' and self._cfg.adc2_gain != 1:
+            identity += (self._cfg.adc2_gain,)
+        return hashlib.sha256(repr(identity).encode()).hexdigest()[:24]
 
     def panel_calibrate(self, action, value):
         if not self._cfg.enabled or self._cfg.simulate:
@@ -175,7 +183,7 @@ class WeightReader:
             minimum_delta = max(10, 10 * max(spread, self._pending_zero_noise))
             if not math.isfinite(value) or value <= 0 or abs(delta) < minimum_delta:
                 raise ValueError(f'Known load too small relative to noise: delta={abs(delta):.2f}, required={minimum_delta:.2f}')
-            cal = ScaleCalibration(self._pending_zero, value / delta, True)
+            cal = ScaleCalibration(self._pending_zero, value / delta, True, self._cfg.adc2_gain)
             save_calibration(self._cfg.calibration_path, cal)
             self._cal = cal
             self._reset_filter()
@@ -300,10 +308,15 @@ class WeightReader:
             if reference_mode not in {"internal", "avdd"}:
                 raise ValueError(f"unsupported reference_mode: {self._cfg.reference_mode}")
             ref_flag = 0x00 if reference_mode == "internal" else 0x20
-            adc2cfg = ref_flag | (adc2_rates[self._cfg.adc2_rate] << 6) | adc2_gains["ADS1263_ADC2_GAIN_1"]
+            gain_key = f"ADS1263_ADC2_GAIN_{self._cfg.adc2_gain}"
+            if gain_key not in adc2_gains:
+                raise ValueError(f"unsupported ADC2 gain: {self._cfg.adc2_gain}")
+            adc2cfg = ref_flag | (adc2_rates[self._cfg.adc2_rate] << 6) | adc2_gains[gain_key]
             self._adc_dev.ADS1263_SetMode(1)
             self._adc_dev.ADS1263_WriteCmd(cmds["CMD_STOP2"])
             self._adc_dev.ADS1263_WriteReg(regs["REG_ADC2CFG"], adc2cfg)
+            if self._adc_dev.ADS1263_ReadData(regs["REG_ADC2CFG"])[0] != adc2cfg:
+                raise RuntimeError("ADC2 gain/rate/reference register verification failed")
             self._adc_dev.ADS1263_WriteReg(regs["REG_MODE0"], delays["ADS1263_DELAY_8d8ms"])
             self._ads_measurement_channel = meas_ch
             self._ads_measurement_sign = meas_sign
@@ -379,7 +392,9 @@ class WeightReader:
 
         avg_counts = float(sum(counts) / len(counts))
         if self._cfg.frontend.lower() == "adc2":
-            return avg_counts
+            # Preserve input-referred raw units across PGA gains. The offset
+            # still depends on gain, so calibration must match adc2_gain.
+            return avg_counts / self._cfg.adc2_gain
         return avg_counts / ADC_FULL_SCALE
 
     def read_raw(self) -> float:
@@ -407,6 +422,9 @@ class WeightReader:
             return Weight(weight=None)
         try:
             raw = self.read_raw()
+            if self._cfg.frontend.lower() == 'adc2' and self._cal.adc2_gain != self._cfg.adc2_gain:
+                self._reset_filter()
+                return Weight(weight=None)
             now = time.monotonic()
             if self._last_read_time is not None and now - self._last_read_time > 3:
                 self._reset_filter()

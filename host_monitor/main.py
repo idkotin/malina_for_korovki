@@ -46,6 +46,7 @@ def _build_weight_reader(cfg) -> WeightReader:
             sample_count=cfg.weight.sample_count,
             adc_rate=cfg.weight.adc_rate,
             adc2_rate=cfg.weight.adc2_rate,
+            adc2_gain=cfg.weight.adc2_gain,
             trim_fraction=cfg.weight.trim_fraction,
             smoothing_alpha=cfg.weight.smoothing_alpha,
             fast_smoothing_alpha=cfg.weight.fast_smoothing_alpha,
