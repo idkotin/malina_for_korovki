@@ -138,7 +138,7 @@ class WeightReader:
             self.__dict__.pop('_pending_zero_noise', None)
         if action == 'span' and not hasattr(self, '_pending_zero'):
             raise ValueError('Capture empty machine zero first')
-        samples = [self.read_raw() for _ in range(20)]
+        samples = [self.read_raw() for _ in range(60)]
         if not all(math.isfinite(x) for x in samples):
             raise ValueError('Non-finite calibration signal')
         raw = statistics.median(samples)
@@ -147,9 +147,19 @@ class WeightReader:
         # the field ADC2 noise allowance for a different measurement scale.
         standalone_adc2 = self._cfg.require_calibration and self._cfg.frontend.lower() == 'adc2'
         limit = max(500 if standalone_adc2 else 10, abs(raw) * .002)
-        sigma = 1.4826 * statistics.median(abs(x - raw) for x in samples)
-        drift = abs(statistics.median(samples[:5]) - statistics.median(samples[-5:]))
-        drift_limit = max(20 if standalone_adc2 else 0, 3 * sigma / math.sqrt(5))
+        # Estimate a trend from the entire capture, not two short end windows.
+        # The noise estimate uses residuals so an actual ramp cannot increase
+        # its own allowed drift. This is a screening rule, not an accuracy claim.
+        center = (len(samples) - 1) / 2
+        mean = statistics.mean(samples)
+        sxx = sum((i - center) ** 2 for i in range(len(samples)))
+        slope = sum((i - center) * (x - mean) for i, x in enumerate(samples)) / sxx
+        residuals = [x - (mean + slope * (i - center)) for i, x in enumerate(samples)]
+        residual_center = statistics.median(residuals)
+        sigma = 1.4826 * statistics.median(abs(x - residual_center) for x in residuals)
+        drift = abs(slope) * (len(samples) - 1)
+        drift_limit = max(20 if standalone_adc2 else 0,
+                          4 * sigma * (len(samples) - 1) / math.sqrt(sxx))
         log.info('Calibration %s median=%.6f range=%.6f limit=%.6f drift=%.6f drift_limit=%.6f',
                  action, raw, spread, limit, drift, drift_limit)
         if spread > limit or drift > drift_limit:
