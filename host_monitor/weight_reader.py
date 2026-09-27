@@ -130,24 +130,47 @@ class WeightReader:
     def panel_calibrate(self, action, value):
         if not self._cfg.enabled or self._cfg.simulate:
             raise ValueError('Calibration needs enabled real sensors')
-        samples = [self.read_raw() for _ in range(5)]
+        if action not in ('zero', 'span'):
+            raise ValueError('Unknown calibration command')
+        if action == 'zero':
+            # A failed retry must not leave an older zero eligible for span.
+            self.__dict__.pop('_pending_zero', None)
+            self.__dict__.pop('_pending_zero_noise', None)
+        if action == 'span' and not hasattr(self, '_pending_zero'):
+            raise ValueError('Capture empty machine zero first')
+        samples = [self.read_raw() for _ in range(20)]
+        if not all(math.isfinite(x) for x in samples):
+            raise ValueError('Non-finite calibration signal')
         raw = statistics.median(samples)
-        if not all(math.isfinite(x) for x in samples) or max(samples) - min(samples) > max(10, abs(raw) * .002):
-            raise ValueError('Unstable calibration load')
+        spread = max(samples) - min(samples)
+        # ADC2 returns counts; ADC1 returns a normalized ratio. Do not use
+        # the field ADC2 noise allowance for a different measurement scale.
+        standalone_adc2 = self._cfg.require_calibration and self._cfg.frontend.lower() == 'adc2'
+        limit = max(500 if standalone_adc2 else 10, abs(raw) * .002)
+        sigma = 1.4826 * statistics.median(abs(x - raw) for x in samples)
+        drift = abs(statistics.median(samples[:5]) - statistics.median(samples[-5:]))
+        drift_limit = max(20 if standalone_adc2 else 0, 3 * sigma / math.sqrt(5))
+        log.info('Calibration %s median=%.6f range=%.6f limit=%.6f drift=%.6f drift_limit=%.6f',
+                 action, raw, spread, limit, drift, drift_limit)
+        if spread > limit or drift > drift_limit:
+            raise ValueError(f'Unstable calibration load: range={spread:.2f}/{limit:.2f}, drift={drift:.2f}/{drift_limit:.2f}')
         if action == 'zero':
             self._pending_zero = raw
+            self._pending_zero_noise = spread
             # Existing valid calibration stays intact until known-load confirmation.
         elif action == 'span':
             if not hasattr(self, '_pending_zero'):
                 raise ValueError('Capture empty machine zero first')
             delta = raw - self._pending_zero
-            if value <= 0 or abs(delta) < 10:
-                raise ValueError('Known load too small')
+            minimum_delta = max(10, 10 * max(spread, self._pending_zero_noise))
+            if not math.isfinite(value) or value <= 0 or abs(delta) < minimum_delta:
+                raise ValueError(f'Known load too small relative to noise: delta={abs(delta):.2f}, required={minimum_delta:.2f}')
             cal = ScaleCalibration(self._pending_zero, value / delta, True)
             save_calibration(self._cfg.calibration_path, cal)
             self._cal = cal
             self._reset_filter()
             del self._pending_zero
+            del self._pending_zero_noise
 
     def prepare(self) -> None:
         self._init_ads1263()
