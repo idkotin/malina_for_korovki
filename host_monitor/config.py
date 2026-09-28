@@ -91,6 +91,7 @@ class WeightCfg(BaseModel):
     fast_change_threshold_kg: float = 30.0
     zero_deadband_kg: float = 10.0
     median_window: int = 5
+    adaptive_filter: bool = False
     invalid_below_kg: float | None = -1000.0
     invalid_above_kg: float | None = None
     # Avoid division by ~0 when bridge excitation is absent.

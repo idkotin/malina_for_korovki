@@ -53,6 +53,7 @@ def _build_weight_reader(cfg) -> WeightReader:
             fast_change_threshold_kg=cfg.weight.fast_change_threshold_kg,
             zero_deadband_kg=cfg.weight.zero_deadband_kg,
             median_window=cfg.weight.median_window,
+            adaptive_filter=cfg.weight.adaptive_filter,
             min_ref_abs=cfg.weight.min_ref_abs,
             invalid_below_kg=cfg.weight.invalid_below_kg,
             invalid_above_kg=cfg.weight.invalid_above_kg,

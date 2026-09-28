@@ -15,6 +15,7 @@ from types import ModuleType
 
 from host_monitor.models import Weight
 from host_monitor.weight_display import WeightDisplay
+from host_monitor.adaptive_weight_filter import AdaptiveWeightFilter
 
 
 log = logging.getLogger("host_monitor.weight")
@@ -44,6 +45,7 @@ class WeightCfg:
     fast_change_threshold_kg: float = 30.0
     zero_deadband_kg: float = 10.0
     median_window: int = 5
+    adaptive_filter: bool = False
     min_ref_abs: float = 1e-9
     invalid_below_kg: float | None = -1000.0
     invalid_above_kg: float | None = None
@@ -108,8 +110,11 @@ class WeightReader:
         self._reseed_valid_reads = 0
         self._display = WeightDisplay()
         self._last_read_time = None
+        self._adaptive_filter = AdaptiveWeightFilter()
+        log.info('Weight filter: %s', 'adaptive-v1' if cfg.adaptive_filter else 'legacy')
 
     def _reset_filter(self):
+        self._adaptive_filter.reset()
         self._filtered_weight = None
         self._recent_weights.clear()
         self._display.reset()
@@ -431,6 +436,7 @@ class WeightReader:
             self._last_read_time = now
             value = (raw - self._cal.offset) * self._cal.scale
             if not self._is_valid_weight_value(float(value)):
+                self._adaptive_filter.reset()
                 self._filtered_weight = None
                 self._recent_weights.clear()
                 self._display.reset()
@@ -442,6 +448,9 @@ class WeightReader:
                 return Weight(weight=None, raw=float(value))
 
             self._invalid_weight_reads = 0
+            if self._cfg.adaptive_filter:
+                filtered = self._adaptive_filter.update(float(value), now)
+                return Weight(weight=self._display.update(filtered), raw=float(value))
             if self._reseed_after_invalid:
                 self._recent_weights.append(float(value))
                 self._reseed_valid_reads += 1
