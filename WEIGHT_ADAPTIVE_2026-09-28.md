@@ -64,3 +64,6 @@ Replay приватного архива (реальный период +07):
 В рабочем `/etc/host-monitor/config.yaml` поставить `weight.adaptive_filter: false`
 и `sudo systemctl restart host-monitor`. Старые параметры и калибровка сохраняются.
 Не запускать заново apply-provisional-calibration.py и не обнулять загруженный кузов.
+
+### Развёрнуто 28.09.2026 09:43 +07
+Pi обновлена штатным update-device.sh до 93623f2, в /etc/host-monitor/config.yaml включён adaptive_filter=true. 83 теста прошли также на Pi, служба active/NRestarts=0; log Weight filter: adaptive-v1. Калибровка SHA256 bb57f855d40be668afcd1822039e6b9596e095fc41ca6cbbc3ba5d45fdf1ab72 до/после одинакова, calibrationId 560ac0efd20ab70789a3db7c. API valid=false/weightKg=null ожидаем при отключённом мосте. Backup config/calibration/worktree diff: /opt/host-monitor-backup-adaptive-YH0grcaP. Перед обновлением обнаружены два пустых tracked файла (CALIBRATION_FIX_2026-09-27.md, tests/test_panel_calibration_noise.py), их diff сохранён и Git-копии восстановлены. Причина опустошения сейчас не установлена; в истории был обрыв питания/повреждение Git. APK и server runtime не менялись. При возврате датчиков проверить массу/отклик; обещать аппаратную точность или полное устранение качки нельзя.
