@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from dataclasses import replace
 
 from host_monitor.adc_transport import read_conversion
 from host_monitor.config import load_config, PanelCfg
@@ -38,6 +39,19 @@ class TransportTests(unittest.TestCase):
 
 
 class ProfilesTests(unittest.TestCase):
+    def test_disconnected_signal_does_not_reset_chip_but_transport_error_does(self):
+        from host_monitor.adc_transport import ADCSignalError
+        with tempfile.TemporaryDirectory() as folder:
+            _,r=self.make(folder)
+            r._cfg=replace(r._cfg,adc_burst=True)
+            r._adc_ready=True
+            r.read_raw=lambda: (_ for _ in ()).throw(ADCSignalError('saturated'))
+            self.assertIsNone(r.read_weight().weight)
+            self.assertTrue(r._adc_ready)
+            r.read_raw=lambda: (_ for _ in ()).throw(IOError('checksum'))
+            self.assertIsNone(r.read_weight().weight)
+            self.assertFalse(r._adc_ready)
+
     def make(self, directory):
         from host_monitor.main import _build_weight_reader
         cfg=load_config('config.with-tablet.yaml')

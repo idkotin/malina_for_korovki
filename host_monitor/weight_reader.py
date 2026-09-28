@@ -129,6 +129,7 @@ class WeightReader:
         self._display = WeightDisplay()
         self._last_read_time = None
         self._burst_active = False
+        self._read_failure_count = 0
         self._adaptive_filter = AdaptiveWeightFilter()
         log.info('Weight filter: %s', 'adaptive-v1' if cfg.adaptive_filter else 'legacy')
 
@@ -550,6 +551,7 @@ class WeightReader:
             return Weight(weight=None)
         try:
             raw = self.read_raw()
+            self._read_failure_count = 0
             if self._cfg.adc_profiles and not self.calibrated:
                 self._reset_filter()
                 return Weight(weight=None)
@@ -611,10 +613,13 @@ class WeightReader:
                 self._filtered_weight = 0.0
             return Weight(weight=self._display.update(display_weight), raw=float(value))
         except Exception as e:
-            if self._cfg.adc_burst:
+            from host_monitor.adc_transport import ADCSignalError
+            if self._cfg.adc_burst and not isinstance(e, ADCSignalError):
                 self._adc_ready = False
             self._reset_filter()
-            log.warning("weight read failed: %s", e)
+            self._read_failure_count += 1
+            if self._read_failure_count == 1 or self._read_failure_count % 60 == 0:
+                log.warning("weight read failed (%s consecutive): %s", self._read_failure_count, e)
             return Weight(weight=None)
 
     def tare(self) -> float:
