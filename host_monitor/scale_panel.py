@@ -13,7 +13,7 @@ from host_monitor.local_scale import atomic_json, measurement
 SEGMENTS = dict(zip('0123456789', ('abcdef', 'bc', 'abdeg', 'abcdg', 'bcfg',
                                   'acdfg', 'acdefg', 'abc', 'abcdefg', 'abcdfg')))
 SEGMENTS.update({' ': '', '-': 'g', 'E': 'adefg', 'r': 'eg', 'P': 'abefg',
-                 'I': 'bc', 'n': 'ceg', 'o': 'cdeg', 'F': 'aefg'})
+                 'I': 'bc', 'n': 'ceg', 'o': 'cdeg', 'F': 'aefg', 'A': 'abcefg', 'd': 'bcdeg', 'C': 'adef'})
 DIGIT_CHANNELS = (0, 7, 14, 24, 31)  # board nearest Pi: three left digits
 
 
@@ -121,10 +121,19 @@ class PanelState:
                         else:
                             self.failures = 0
                             self.value = 5
-            elif self.mode == 'span' and key in ('plus', 'minus'):
-                self.value = max(5, min(99995, self.value + (50 if long else 5) * (1 if key == 'plus' else -1)))
+                            if self.mode == 'adc':
+                                self.value = self.sampler.status().get('adc_profile', 2)
+                            elif self.mode == 'anchor':
+                                self.value = 0
+            elif self.mode == 'adc' and key in ('plus', 'minus'):
+                self.value = 1 if self.value == 2 else 2
+            elif self.mode in ('span', 'anchor') and key in ('plus', 'minus'):
+                self.value = max(0 if self.mode == 'anchor' else 5, min(99995, self.value + (50 if long else 5) * (1 if key == 'plus' else -1)))
             elif key == 'net' and long:
-                self.sampler.command(self.mode, self.value)
+                try:
+                    self.sampler.command(self.mode, self.value)
+                except Exception:
+                    self.error_until = now + 2
                 self.mode = 'weight'
             return
         if key == 'admin' and now >= self.lock_until:
@@ -153,6 +162,8 @@ class PanelState:
             return '     '
         if now < self.error_until or (self.mode == 'weight' and self.sampler.status().get('command_error')):
             return 'Err  '
+        if self.mode == 'weight' and self.sampler.status().get('command_busy'):
+            return '-----'
         if self.mode == 'pin':
             digits = list(map(str, self.digits))
             if int(now * 2) % 2:
@@ -160,8 +171,10 @@ class PanelState:
             return 'P' + ''.join(digits)
         if self.mode == 'zero':
             return '    0'
-        if self.mode == 'span':
+        if self.mode in ('span', 'anchor'):
             return display_number(self.value)
+        if self.mode == 'adc':
+            return 'AdC ' + str(self.value)
         packet = measurement(self.sampler, self.device_id)
         if self.state['calibration_id'] != packet['calibrationId']:
             self.state['tare'] = 0.0
@@ -198,7 +211,7 @@ class ScalePanel:
                     self.state.press('admin')
                     consumed.update(('plus', 'minus'))
                 for key in pressed:
-                    if key in ('plus', 'minus') and not chord and self.state.mode == 'span' and key in consumed and now - repeated.get(key, 0) >= .15:
+                    if key in ('plus', 'minus') and not chord and self.state.mode in ('span', 'anchor') and key in consumed and now - repeated.get(key, 0) >= .15:
                         self.state.press(key, long=True)
                         repeated[key] = now
                     if key not in consumed and not (chord and key in ('plus', 'minus')) and now - down[key] >= 2:

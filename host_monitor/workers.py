@@ -34,6 +34,7 @@ class WeightSampler:
         self._timestamp_ms = 0
         self._commands = queue.Queue(maxsize=1)
         self._command_error = None
+        self._command_busy = False
         self._calibration_id = getattr(reader, 'calibration_id', 'legacy')
         self._calibrated = getattr(reader, 'calibrated', True)
 
@@ -58,6 +59,7 @@ class WeightSampler:
                 except queue.Empty:
                     action = None
                 if action:
+                    self._command_busy = True
                     try:
                         self._reader.panel_calibrate(action, value)
                         self._command_error = None
@@ -71,6 +73,7 @@ class WeightSampler:
                 log.warning("background weight read failed: %s", exc)
             finished = time.monotonic()
             with self._lock:
+                self._command_busy = False
                 self._weight = value
                 self._updated_monotonic = finished
                 self._read_duration_s = finished - started
@@ -82,7 +85,7 @@ class WeightSampler:
             self._stop.wait(max(0.005, .5 - (time.monotonic() - started)))
 
     def command(self, action: str, value: float = 0):
-        if action not in ('zero', 'span'):
+        if action not in ('zero', 'span', 'adc', 'anchor'):
             raise ValueError('Unknown calibration command')
         self._commands.put_nowait((action, value))
 
@@ -91,7 +94,8 @@ class WeightSampler:
             age = None if self._updated_monotonic is None else max(0, time.monotonic() - self._updated_monotonic)
             return dict(weight=self._weight.model_copy(deep=True), age_s=age,
                         timestamp_ms=self._timestamp_ms, packet_id=f'{self._boot_id}:{self._sequence}',
-                        calibration_id=self._calibration_id, calibrated=self._calibrated)
+                        calibration_id=self._calibration_id,
+                        calibrated=self._calibrated and not self._command_busy and self._commands.empty())
 
     def latest(self) -> Weight:
         with self._lock:
@@ -106,6 +110,8 @@ class WeightSampler:
                 "last_error": self._last_error,
                 "running": bool(self._thread and self._thread.is_alive()),
                 "command_error": self._command_error,
+                "command_busy": self._command_busy,
+                "adc_profile": getattr(self._reader, 'adc_profile', 2),
             }
 
 

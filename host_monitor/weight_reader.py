@@ -9,7 +9,7 @@ import random
 import statistics
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 
@@ -46,6 +46,8 @@ class WeightCfg:
     zero_deadband_kg: float = 10.0
     median_window: int = 5
     adaptive_filter: bool = False
+    adc_burst: bool = False
+    adc_profiles: bool = False
     min_ref_abs: float = 1e-9
     invalid_below_kg: float | None = -1000.0
     invalid_above_kg: float | None = None
@@ -58,6 +60,8 @@ class ScaleCalibration:
     scale: float = 1.0  # kg per raw_unit
     confirmed: bool = False
     adc2_gain: int = 1
+    frontend: str = 'adc2'
+    provisional: bool = False
 
 
 def load_calibration(path: str) -> ScaleCalibration:
@@ -70,7 +74,8 @@ def load_calibration(path: str) -> ScaleCalibration:
         if not math.isfinite(offset) or not math.isfinite(scale) or scale == 0:
             raise ValueError('Invalid calibration')
         return ScaleCalibration(offset=offset, scale=scale, confirmed=obj.get('confirmed') is True,
-                                adc2_gain=int(obj.get('adc2_gain', 1)))
+                                adc2_gain=int(obj.get('adc2_gain', 1)), frontend=obj.get('frontend', 'adc2'),
+                                provisional=obj.get('provisional') is True)
     except Exception:
         return ScaleCalibration()
 
@@ -80,7 +85,8 @@ def save_calibration(path: str, cal: ScaleCalibration) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     from host_monitor.local_scale import atomic_json
     atomic_json(str(p), {'offset': cal.offset, 'scale': cal.scale, 'confirmed': cal.confirmed,
-                         'adc2_gain': cal.adc2_gain})
+                         'adc2_gain': cal.adc2_gain, 'frontend': cal.frontend,
+                         'provisional': cal.provisional, 'precision_verified': False})
 
 
 class WeightReader:
@@ -95,6 +101,18 @@ class WeightReader:
     """
 
     def __init__(self, cfg: WeightCfg):
+        self._base_cfg = cfg
+        self._profile_path = cfg.calibration_path + '.mode.json'
+        if cfg.adc_profiles:
+            if cfg.frontend != 'adc2' or cfg.reference_mode != 'internal':
+                raise ValueError('ADC profiles require an ADC2/internal base configuration')
+            try:
+                profile = json.loads(Path(self._profile_path).read_text())['adc']
+            except FileNotFoundError:
+                profile = 2
+            if profile not in (1, 2):
+                raise ValueError('Invalid saved ADC profile')
+            cfg = self._profile_cfg(profile)
         self._cfg = cfg
         self._cal = load_calibration(cfg.calibration_path)
         self._t = 0
@@ -110,6 +128,7 @@ class WeightReader:
         self._reseed_valid_reads = 0
         self._display = WeightDisplay()
         self._last_read_time = None
+        self._burst_active = False
         self._adaptive_filter = AdaptiveWeightFilter()
         log.info('Weight filter: %s', 'adaptive-v1' if cfg.adaptive_filter else 'legacy')
 
@@ -128,7 +147,39 @@ class WeightReader:
     @property
     def calibrated(self):
         gain_matches = self._cfg.frontend.lower() != 'adc2' or self._cal.adc2_gain == self._cfg.adc2_gain
-        return gain_matches and (not self._cfg.require_calibration or self._cal.confirmed)
+        profile_matches = not self._cfg.adc_profiles or self._cal.frontend == self._cfg.frontend
+        return gain_matches and profile_matches and (not self._cfg.require_calibration or self._cal.confirmed)
+
+    @property
+    def adc_profile(self):
+        return 2 if self._cfg.frontend == 'adc2' else 1
+
+    def _profile_cfg(self, profile):
+        if profile == 2:
+            return self._base_cfg
+        return replace(self._base_cfg, frontend='adc1', adc_rate='ADS1263_100SPS',
+                       calibration_path=self._base_cfg.calibration_path + '.adc1.json',
+                       adc_burst=True, require_calibration=True)
+
+    def switch_adc(self, profile):
+        if not self._base_cfg.adc_profiles or profile not in (1, 2):
+            raise ValueError('ADC profile unavailable')
+        old_cfg = self._cfg
+        self._cfg = self._profile_cfg(profile)
+        try:
+            self._adc_ready = False
+            self._init_ads1263()
+            from host_monitor.local_scale import atomic_json
+            atomic_json(self._profile_path, {'adc': profile})
+        except Exception:
+            self._cfg = old_cfg
+            self._adc_ready = False
+            raise
+        finally:
+            self.__dict__.pop('_pending_zero', None)
+            self.__dict__.pop('_pending_zero_noise', None)
+            self.reload_calibration()
+        log.info('ADC profile changed to %s; calibrated=%s', profile, self.calibrated)
 
     @property
     def calibration_id(self):
@@ -138,13 +189,26 @@ class WeightReader:
                                     self._cfg.ref_neg)
         if self._cfg.frontend.lower() == 'adc2' and self._cfg.adc2_gain != 1:
             identity += (self._cfg.adc2_gain,)
+        if self._cfg.adc_profiles and self.adc_profile == 1:
+            identity += ('adc1-internal-gain32-input-counts-v1',)
         return hashlib.sha256(repr(identity).encode()).hexdigest()[:24]
 
     def panel_calibrate(self, action, value):
+        if action == 'adc':
+            self.switch_adc(int(value))
+            return
         if not self._cfg.enabled or self._cfg.simulate:
             raise ValueError('Calibration needs enabled real sensors')
-        if action not in ('zero', 'span'):
+        if action not in ('zero', 'span', 'anchor'):
             raise ValueError('Unknown calibration command')
+        if action == 'anchor':
+            if not self._cfg.adc_profiles or self.adc_profile != 1:
+                raise ValueError('One-point calibration is only available for ADC1')
+            if not math.isfinite(value) or not 0 <= value <= 99995:
+                raise ValueError('Invalid known weight')
+            source = load_calibration(self._base_cfg.calibration_path)
+            if not source.confirmed or source.adc2_gain != self._base_cfg.adc2_gain:
+                raise ValueError('Confirmed ADC2 source calibration required')
         if action == 'zero':
             # A failed retry must not leave an older zero eligible for span.
             self.__dict__.pop('_pending_zero', None)
@@ -158,7 +222,7 @@ class WeightReader:
         spread = max(samples) - min(samples)
         # ADC2 returns counts; ADC1 returns a normalized ratio. Do not use
         # the field ADC2 noise allowance for a different measurement scale.
-        standalone_adc2 = self._cfg.require_calibration and self._cfg.frontend.lower() == 'adc2'
+        standalone_adc2 = self._cfg.require_calibration and (self._cfg.frontend.lower() == 'adc2' or self._cfg.adc_profiles)
         limit = max(500 if standalone_adc2 else 10, abs(raw) * .002)
         # Estimate a trend from the entire capture, not two short end windows.
         # The noise estimate uses residuals so an actual ramp cannot increase
@@ -181,6 +245,20 @@ class WeightReader:
             self._pending_zero = raw
             self._pending_zero_noise = spread
             # Existing valid calibration stays intact until known-load confirmation.
+        elif action == 'anchor':
+            # Both profiles use input-referred ADC2-equivalent counts. Preserve
+            # the previous ADC2 slope, but measure ADC1's OWN offset in the field.
+            cal = ScaleCalibration(raw - value/source.scale, source.scale, True,
+                                   self._cfg.adc2_gain, 'adc1', provisional=True)
+            save_calibration(self._cfg.calibration_path, cal)
+            self._cal = cal
+            self._reset_filter()
+            self.__dict__.pop('_pending_zero', None)
+            self.__dict__.pop('_pending_zero_noise', None)
+            if value == 0:
+                self._pending_zero, self._pending_zero_noise = raw, spread
+            log.warning('ADC1 provisional one-point calibration: known_kg=%s; inherited scale=%s',
+                        value, source.scale)
         elif action == 'span':
             if not hasattr(self, '_pending_zero'):
                 raise ValueError('Capture empty machine zero first')
@@ -188,7 +266,7 @@ class WeightReader:
             minimum_delta = max(10, 10 * max(spread, self._pending_zero_noise))
             if not math.isfinite(value) or value <= 0 or abs(delta) < minimum_delta:
                 raise ValueError(f'Known load too small relative to noise: delta={abs(delta):.2f}, required={minimum_delta:.2f}')
-            cal = ScaleCalibration(self._pending_zero, value / delta, True, self._cfg.adc2_gain)
+            cal = ScaleCalibration(self._pending_zero, value / delta, True, self._cfg.adc2_gain, self._cfg.frontend)
             save_calibration(self._cfg.calibration_path, cal)
             self._cal = cal
             self._reset_filter()
@@ -306,6 +384,26 @@ class WeightReader:
 
         meas_ch, meas_sign = self._diff_channel_from_ain_pair(self._cfg.channel_pos, self._cfg.channel_neg)
 
+        if self._cfg.adc_burst or (self._cfg.adc_profiles and frontend == 'adc1'):
+            for name, val in [('REG_INTERFACE', 0x05), ('REG_POWER', 0x01)]:
+                self._adc_dev.ADS1263_WriteReg(regs[name], val)
+                if self._adc_dev.ADS1263_ReadData(regs[name])[0] != val:
+                    raise RuntimeError(f'{name} verification failed')
+            time.sleep(.05)  # internal reference settling after reset
+
+        if self._cfg.adc_profiles and frontend == 'adc1':
+            self._adc_dev.ADS1263_WriteCmd(cmds['CMD_STOP1'])
+            self._adc_dev.ADS1263_WriteCmd(cmds['CMD_STOP2'])
+            # Internal reference, PGA32, 100 SPS, sinc3; no change to wiring.
+            settings = {'REG_MODE0': 0, 'REG_MODE1': 0x40, 'REG_MODE2': 0x57,
+                        'REG_REFMUX': 0, 'REG_INPMUX': (meas_ch*2 << 4) | (meas_ch*2+1)}
+            for name, val in settings.items():
+                self._adc_dev.ADS1263_WriteReg(regs[name], val)
+                if self._adc_dev.ADS1263_ReadData(regs[name])[0] != val:
+                    raise RuntimeError(f'{name} verification failed')
+            self._ads_measurement_channel, self._ads_measurement_sign = meas_ch, meas_sign
+            return
+
         if frontend == "adc2":
             if delays is None or adc2_rates is None or adc2_gains is None:
                 raise RuntimeError("ADS1263 ADC2 definitions not found in Waveshare module")
@@ -346,6 +444,10 @@ class WeightReader:
         assert self._adc_mod is not None
         assert self._adc_dev is not None
 
+        if self._burst_active:
+            from host_monitor.adc_transport import read_conversion
+            return float(read_conversion(self._adc_mod, self._adc_dev, self.adc_profile))
+
         if self._cfg.frontend.lower() == "adc2":
             return self._read_ads1263_diff_adc2(diff_channel_index)
 
@@ -368,8 +470,10 @@ class WeightReader:
 
         set_diff(int(diff_channel_index))
         self._adc_dev.ADS1263_WriteCmd(cmds["CMD_START2"])
-        value = read_fn()
-        self._adc_dev.ADS1263_WriteCmd(cmds["CMD_STOP2"])
+        try:
+            value = read_fn()
+        finally:
+            self._adc_dev.ADS1263_WriteCmd(cmds["CMD_STOP2"])
         return float(self._to_signed24(int(value)))
 
     def read_raw_counts(self) -> int:
@@ -386,8 +490,24 @@ class WeightReader:
 
         counts: list[int] = []
         n = max(1, int(self._cfg.sample_count))
-        for _ in range(n):
-            counts.append(self.read_raw_counts())
+        burst = self._cfg.adc_burst
+        if burst:
+            self._init_ads1263()
+            # Restart once per batch so the first result is fresh after idle.
+            cmds = self._adc_mod.ADS1263_CMD
+            adc = self.adc_profile
+            self._adc_dev.ADS1263_WriteCmd(cmds[f'CMD_STOP{adc}'])
+            if adc == 2:
+                self._adc_dev.ADS1263_SetDiffChannal_ADC2(self._ads_measurement_channel)
+            self._adc_dev.ADS1263_WriteCmd(cmds[f'CMD_START{adc}'])
+            self._burst_active = True
+        try:
+            for _ in range(n):
+                counts.append(self.read_raw_counts())
+        finally:
+            if burst:
+                self._burst_active = False
+                self._adc_dev.ADS1263_WriteCmd(cmds[f'CMD_STOP{adc}'])
 
         if self._cfg.trim_fraction > 0 and len(counts) >= 5:
             counts.sort()
@@ -400,6 +520,9 @@ class WeightReader:
             # Preserve input-referred raw units across PGA gains. The offset
             # still depends on gain, so calibration must match adc2_gain.
             return avg_counts / self._cfg.adc2_gain
+        if self._cfg.adc_profiles:
+            # Input-referred ADC2-equivalent counts, only for independent ADC1 calibration.
+            return avg_counts / (256 * 32)
         return avg_counts / ADC_FULL_SCALE
 
     def read_raw(self) -> float:
@@ -427,6 +550,9 @@ class WeightReader:
             return Weight(weight=None)
         try:
             raw = self.read_raw()
+            if self._cfg.adc_profiles and not self.calibrated:
+                self._reset_filter()
+                return Weight(weight=None)
             if self._cfg.frontend.lower() == 'adc2' and self._cal.adc2_gain != self._cfg.adc2_gain:
                 self._reset_filter()
                 return Weight(weight=None)
@@ -485,6 +611,8 @@ class WeightReader:
                 self._filtered_weight = 0.0
             return Weight(weight=self._display.update(display_weight), raw=float(value))
         except Exception as e:
+            if self._cfg.adc_burst:
+                self._adc_ready = False
             self._reset_filter()
             log.warning("weight read failed: %s", e)
             return Weight(weight=None)

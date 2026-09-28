@@ -92,6 +92,8 @@ class WeightCfg(BaseModel):
     zero_deadband_kg: float = 10.0
     median_window: int = 5
     adaptive_filter: bool = False
+    adc_burst: bool = False
+    adc_profiles: bool = False
     invalid_below_kg: float | None = -1000.0
     invalid_above_kg: float | None = None
     # Avoid division by ~0 when bridge excitation is absent.
@@ -180,8 +182,9 @@ class PanelCfg(BaseModel):
                                                 'minus_pin', 'plus_pin', 'power_pin', 'net_pin')]
         if len(set(pins)) != len(pins) or any(p not in range(2, 28) or p in (7, 8, 9, 10, 11, 14, 15, 17, 18, 22) for p in pins):
             raise ValueError('Panel GPIO conflicts with ADC/UART or is duplicated')
-        if self.enabled and (set(self.admin_pins) != {'zero', 'span'} or
-            len(set(self.admin_pins.values())) != 2 or any(len(p) != 4 or not p.isascii() or not p.isdigit() for p in self.admin_pins.values())):
+        if self.enabled and (not {'zero', 'span'} <= set(self.admin_pins) or
+            not set(self.admin_pins) <= {'zero', 'span', 'adc', 'anchor'} or
+            len(set(self.admin_pins.values())) != len(self.admin_pins) or any(len(p) != 4 or not p.isascii() or not p.isdigit() for p in self.admin_pins.values())):
             raise ValueError('Configure distinct four-digit zero/span PINs in the live config')
         return self
 
