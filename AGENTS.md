@@ -500,3 +500,13 @@ Pi обновлена штатным update-device.sh до 93623f2, в /etc/host
 User explicitly requested deployment, button switching and provisional ADC1 calibration by one known point. See ADC_PROFILES_2026-09-28.md. ADC2 calibration remains byte-identical. New live PIN7229 selects ADC1/2; PIN7230 anchors ADC1 to known total kg (zero allowed). ADC1 gain32/internal/100SPS/sinc3 has separate .adc1.json; persisted choice .mode.json. Old ADC2 slope is reused only as provisional; one point measures ADC1 offset, not gain. No automatic calibration on disconnected inputs. WeightSampler owns all switching/calibration; profiles change calibrationId, do not switch mid-component on tablet. Internal TDAC self-test passed: ADC2 old batch0.250s/new0.102s; ADC1 batch0.101s. This does not test bridge accuracy. Initial ADC1 estimate offset1791.3627929687502, scale2.0209731543624163, confirmed=false until field anchor. Burst enabled on ADC2. Backup /opt/host-monitor-backup-profiles-AnQMlc9f. Current disconnected bridge correctly invalid; input saturation should not reset chip continuously. 90 unit tests after this guard. Don't overwrite original ADC2 calibration or run old provisional-calibration script.
 
 Hardware deployment verified on Pi e39d49d: 90 tests passed on Pi, actual ADC1->ADC2 register/profile switch and profile-file persistence passed using temporary calibration files; original ADC2 bytes unchanged. One-point calibration was tested synthetically only, not applied to disconnected sensors. Default working profile remains ADC2. Physical button presses still need operator verification. Change profile/calibration BETWEEN tablet tasks, since calibrationId binds task weight readings. ADC1 provisional estimate is present but confirmed=false until field anchor. Runtime reports disconnected input saturation as invalid, without repeated chip resets.
+
+## Persistent calibration preparation — 28.09.2026
+User requires switching/restart between empty and loaded points. Each profile now has
+its own atomic .pending-zero.json bound to calibrationId; consumed after successful
+span, invalidated before a new zero/anchor attempt. ADC1 later anchors preserve its
+own established scale instead of reimporting ADC2. See ADC_FIELD_RUN_2026-09-28.md.
+93 local tests pass including switching/restart/independent zeros/stale zero rejection.
+Clarification of older notes: tablet calibrationId is bound per active COMPONENT,
+not necessarily the whole task. Finish component before switching or calibrating.
+No field mass calibration was performed remotely on disconnected inputs.

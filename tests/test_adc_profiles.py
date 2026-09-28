@@ -99,6 +99,65 @@ class ProfilesTests(unittest.TestCase):
             self.assertFalse(r._cal.provisional)
             self.assertEqual(r._cal.frontend,'adc1')
 
+    def test_pending_zeros_survive_switch_restart_and_are_independent(self):
+        from host_monitor.main import _build_weight_reader
+        with tempfile.TemporaryDirectory() as folder:
+            cfg,r=self.make(folder)
+            original=Path(cfg.weight.calibration_path).read_bytes()
+            r.read_raw=lambda: 1800
+            r.panel_calibrate('zero',0)
+            r.switch_adc(1)
+            r.read_raw=lambda: 2000
+            r.panel_calibrate('anchor',0)
+            r.switch_adc(2)
+            r=_build_weight_reader(cfg)
+            r._init_ads1263=lambda: None
+            self.assertEqual(r._pending_zero,1800)
+            r.switch_adc(1)
+            self.assertEqual(r._pending_zero,2000)
+            r.read_raw=lambda: 2800
+            r.panel_calibrate('span',2000)
+            self.assertEqual(r._cal.scale,2.5)
+            self.assertFalse(hasattr(r,'_pending_zero'))
+            r.reload_calibration()
+            self.assertFalse(hasattr(r,'_pending_zero'))
+            r.switch_adc(2)
+            self.assertEqual(r._pending_zero,1800)
+            self.assertEqual(Path(cfg.weight.calibration_path).read_bytes(),original)
+            r.switch_adc(1)
+            r.read_raw=lambda: 2900
+            r.panel_calibrate('anchor',2000)
+            self.assertEqual(r._cal.scale,2.5)
+            self.assertEqual(r._cal.offset,2100)
+            self.assertFalse(r._cal.provisional)
+            r.read_raw=lambda: 2100
+            r.panel_calibrate('anchor',0)
+            self.assertEqual(r._cal.scale,2.5)
+
+    def test_failed_new_zero_invalidates_saved_pending_but_keeps_calibration(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _,r=self.make(folder)
+            r.switch_adc(1)
+            r.read_raw=lambda: 2000
+            r.panel_calibrate('anchor',0)
+            original=Path(r._cfg.calibration_path).read_bytes()
+            r.read_raw=lambda: (_ for _ in ()).throw(IOError('disconnected'))
+            with self.assertRaises(IOError): r.panel_calibrate('zero',0)
+            r.reload_calibration()
+            self.assertFalse(hasattr(r,'_pending_zero'))
+            self.assertEqual(Path(r._cfg.calibration_path).read_bytes(),original)
+
+    def test_stale_or_malformed_pending_zero_is_not_used(self):
+        with tempfile.TemporaryDirectory() as folder:
+            _,r=self.make(folder)
+            path=Path(r._cfg.calibration_path+'.pending-zero.json')
+            for saved in [[], {'active':True,'calibration_id':'old','raw':2,'noise':0},
+                          {'active':True,'calibration_id':r.calibration_id,'raw':'NaN','noise':0}]:
+                path.write_text(json.dumps(saved))
+                r.reload_calibration()
+                with self.assertRaisesRegex(ValueError,'Capture empty'):
+                    r.panel_calibrate('span',2000)
+
     def test_failed_switch_and_noisy_anchor_preserve_files(self):
         with tempfile.TemporaryDirectory() as folder:
             cfg,r=self.make(folder)
@@ -133,3 +192,4 @@ class ProfilesTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+

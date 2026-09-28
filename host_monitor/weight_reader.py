@@ -131,6 +131,7 @@ class WeightReader:
         self._burst_active = False
         self._read_failure_count = 0
         self._adaptive_filter = AdaptiveWeightFilter()
+        self._restore_pending_zero()
         log.info('Weight filter: %s', 'adaptive-v1' if cfg.adaptive_filter else 'legacy')
 
     def _reset_filter(self):
@@ -144,6 +145,42 @@ class WeightReader:
     def reload_calibration(self) -> None:
         self._cal = load_calibration(self._cfg.calibration_path)
         self._reset_filter()
+        self._restore_pending_zero()
+
+    def _restore_pending_zero(self):
+        self.__dict__.pop('_pending_zero', None)
+        self.__dict__.pop('_pending_zero_noise', None)
+        if not self._cfg.adc_profiles:
+            return
+        try:
+            saved = json.loads(Path(self._cfg.calibration_path + '.pending-zero.json').read_text())
+            if not isinstance(saved, dict):
+                raise ValueError('Invalid saved zero document')
+            if saved.get('active') is not True or saved.get('calibration_id') != self.calibration_id:
+                return
+            raw, noise = float(saved['raw']), float(saved['noise'])
+            if not math.isfinite(raw) or not math.isfinite(noise) or noise < 0:
+                raise ValueError('Invalid saved zero')
+            self._pending_zero, self._pending_zero_noise = raw, noise
+        except FileNotFoundError:
+            pass
+        except (ValueError, TypeError, KeyError):
+            log.warning('Saved calibration zero is invalid; capture zero again')
+
+    def _clear_pending_zero(self):
+        self.__dict__.pop('_pending_zero', None)
+        self.__dict__.pop('_pending_zero_noise', None)
+        if self._cfg.adc_profiles:
+            from host_monitor.local_scale import atomic_json
+            atomic_json(self._cfg.calibration_path + '.pending-zero.json', {'active': False})
+
+    def _remember_pending_zero(self, raw, noise):
+        if self._cfg.adc_profiles:
+            from host_monitor.local_scale import atomic_json
+            atomic_json(self._cfg.calibration_path + '.pending-zero.json',
+                        {'active': True, 'calibration_id': self.calibration_id,
+                         'raw': raw, 'noise': noise, 'captured_at_ms': int(time.time()*1000)})
+        self._pending_zero, self._pending_zero_noise = raw, noise
 
     @property
     def calibrated(self):
@@ -207,13 +244,13 @@ class WeightReader:
                 raise ValueError('One-point calibration is only available for ADC1')
             if not math.isfinite(value) or not 0 <= value <= 99995:
                 raise ValueError('Invalid known weight')
-            source = load_calibration(self._base_cfg.calibration_path)
-            if not source.confirmed or source.adc2_gain != self._base_cfg.adc2_gain:
-                raise ValueError('Confirmed ADC2 source calibration required')
-        if action == 'zero':
+            inherited = not (self._cal.confirmed and self._cal.frontend == 'adc1')
+            source = load_calibration(self._base_cfg.calibration_path) if inherited else self._cal
+            if not source.confirmed or (inherited and source.adc2_gain != self._base_cfg.adc2_gain):
+                raise ValueError('Confirmed source calibration required')
+        if action in ('zero', 'anchor'):
             # A failed retry must not leave an older zero eligible for span.
-            self.__dict__.pop('_pending_zero', None)
-            self.__dict__.pop('_pending_zero_noise', None)
+            self._clear_pending_zero()
         if action == 'span' and not hasattr(self, '_pending_zero'):
             raise ValueError('Capture empty machine zero first')
         samples = [self.read_raw() for _ in range(60)]
@@ -243,23 +280,21 @@ class WeightReader:
         if spread > limit or drift > drift_limit:
             raise ValueError(f'Unstable calibration load: range={spread:.2f}/{limit:.2f}, drift={drift:.2f}/{drift_limit:.2f}')
         if action == 'zero':
-            self._pending_zero = raw
-            self._pending_zero_noise = spread
+            self._remember_pending_zero(raw, spread)
             # Existing valid calibration stays intact until known-load confirmation.
         elif action == 'anchor':
             # Both profiles use input-referred ADC2-equivalent counts. Preserve
-            # the previous ADC2 slope, but measure ADC1's OWN offset in the field.
+            # established ADC1 slope (initially inherited from ADC2), changing
+            # only ADC1's offset in the field.
             cal = ScaleCalibration(raw - value/source.scale, source.scale, True,
-                                   self._cfg.adc2_gain, 'adc1', provisional=True)
+                                   self._cfg.adc2_gain, 'adc1', provisional=inherited or source.provisional)
             save_calibration(self._cfg.calibration_path, cal)
             self._cal = cal
             self._reset_filter()
-            self.__dict__.pop('_pending_zero', None)
-            self.__dict__.pop('_pending_zero_noise', None)
             if value == 0:
-                self._pending_zero, self._pending_zero_noise = raw, spread
-            log.warning('ADC1 provisional one-point calibration: known_kg=%s; inherited scale=%s',
-                        value, source.scale)
+                self._remember_pending_zero(raw, spread)
+            log.warning('ADC1 one-point anchor: known_kg=%s; scale=%s; inherited=%s; provisional=%s',
+                        value, source.scale, inherited, cal.provisional)
         elif action == 'span':
             if not hasattr(self, '_pending_zero'):
                 raise ValueError('Capture empty machine zero first')
@@ -271,8 +306,7 @@ class WeightReader:
             save_calibration(self._cfg.calibration_path, cal)
             self._cal = cal
             self._reset_filter()
-            del self._pending_zero
-            del self._pending_zero_noise
+            self._clear_pending_zero()
 
     def prepare(self) -> None:
         self._init_ads1263()
