@@ -92,8 +92,10 @@ def main(argv: list[str] | None = None) -> None:
     weight_sampler.start()
     local_server = None
     panel = None
+    def panel_tare(calibration_id):
+        return panel.state.tare_for(calibration_id) if panel is not None else 0.0
     if cfg.local_scale.enabled:
-        local_server = LocalWeightServer(weight_sampler, cfg.device.id, cfg.local_scale.listen, cfg.local_scale.port)
+        local_server = LocalWeightServer(weight_sampler, cfg.device.id, cfg.local_scale.listen, cfg.local_scale.port, panel_tare)
         local_server.start()
     if cfg.panel.enabled:
         try:
@@ -249,7 +251,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             payload = telemetry.model_dump(mode="json")
             if cfg.local_scale.enabled:
-                payload['scale_measurement'] = measurement(weight_sampler, cfg.device.id, weight_snapshot)
+                payload['scale_measurement'] = measurement(weight_sampler, cfg.device.id, weight_snapshot, panel_tare)
 
             now = time.monotonic()
             movement_speed_threshold = max(0.0, float(cfg.send.movement_speed_kmh))

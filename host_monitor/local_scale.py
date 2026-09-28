@@ -27,19 +27,22 @@ def atomic_json(path: str, value: dict) -> None:
             os.close(fd)
 
 
-def measurement(sampler, device_id: str, snapshot=None) -> dict:
+def measurement(sampler, device_id: str, snapshot=None, tare_provider=None) -> dict:
     snap = sampler.snapshot() if snapshot is None else snapshot
     value = snap['weight'].weight
     valid = (value is not None and math.isfinite(value) and snap['age_s'] is not None
              and snap['age_s'] <= 3 and snap['calibrated'])
-    return dict(version=1, deviceId=device_id, packetId=snap['packet_id'],
+    result = dict(version=1, deviceId=device_id, packetId=snap['packet_id'],
                 timestampMs=snap['timestamp_ms'], weightKg=value if valid else None,
                 valid=valid, calibrationId=snap['calibration_id'], ageMs=None if
                 snap['age_s'] is None else int(snap['age_s'] * 1000))
+    if tare_provider is not None:
+        result['tareKg'] = tare_provider(snap['calibration_id'])
+    return result
 
 
 class LocalWeightServer:
-    def __init__(self, sampler, device_id: str, listen: str, port: int):
+    def __init__(self, sampler, device_id: str, listen: str, port: int, tare_provider=None):
         class Handler(BaseHTTPRequestHandler):
             def setup(self):
                 super().setup()
@@ -49,7 +52,7 @@ class LocalWeightServer:
                 if self.path != '/v1/weight':
                     self.send_error(404)
                     return
-                body = json.dumps(measurement(sampler, device_id), allow_nan=False).encode()
+                body = json.dumps(measurement(sampler, device_id, tare_provider=tare_provider), allow_nan=False).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Cache-Control', 'no-store')

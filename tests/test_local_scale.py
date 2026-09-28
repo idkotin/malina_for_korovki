@@ -64,14 +64,20 @@ class ScaleTests(unittest.TestCase):
             panel.press('net')
             self.assertEqual(panel.text(), '    0')
             self.assertEqual(measurement(self.sampler, 'host')['weightKg'], 2500)
+            net = measurement(self.sampler, 'host', tare_provider=panel.tare_for)
+            self.assertEqual(net['tareKg'], 2500)
+            self.assertEqual(net['weightKg'], 2500)
+            self.assertEqual(panel.tare_for('different-calibration'), 0)
             restored = PanelState(cfg, self.sampler, 'host')
             self.assertEqual(restored.text(), '    0')
+            self.assertEqual(restored.tare_for('cal-one'), 2500)
             restored.press('power')
             self.assertEqual(restored.text(), '     ')
             self.assertTrue(measurement(self.sampler, 'host')['valid'])
             restored.press('power')
             restored.press('net', long=True)
             self.assertEqual(restored.text(), ' 2500')
+            self.assertEqual(measurement(self.sampler, 'host', tare_provider=restored.tare_for)['tareKg'], 0)
 
     def test_admin_pin_selection_and_timeout(self):
         with tempfile.TemporaryDirectory() as folder:

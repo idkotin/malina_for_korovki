@@ -84,6 +84,7 @@ class PanelState:
             pass
         except (ValueError, KeyError, TypeError):
             logging.getLogger(__name__).error('Invalid panel state; using defaults')
+        self._published_tare = (self.state['calibration_id'], float(self.state['tare']))
         self.mode = 'weight'
         self.digits = [0] * 4
         self.cursor = 0
@@ -95,6 +96,12 @@ class PanelState:
 
     def save(self):
         atomic_json(self.cfg.state_path, self.state)
+        self._published_tare = (self.state['calibration_id'], float(self.state['tare']))
+
+    def tare_for(self, calibration_id):
+        # Immutable pair: HTTP/telemetry must never see a half-updated tare.
+        revision, tare = self._published_tare
+        return tare if revision == calibration_id else 0.0
 
     def press(self, key: str, long=False):
         now = self.clock()
