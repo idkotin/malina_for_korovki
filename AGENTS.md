@@ -510,3 +510,14 @@ own established scale instead of reimporting ADC2. See ADC_FIELD_RUN_2026-09-28.
 Clarification of older notes: tablet calibrationId is bound per active COMPONENT,
 not necessarily the whole task. Finish component before switching or calibrating.
 No field mass calibration was performed remotely on disconnected inputs.
+
+## Calibration persistence deployed — 28.09.2026 10:43 +07
+Pi executable commit 876a456 deployed successfully; 93 tests passed locally and on
+Pi, service active/running with NRestarts=0. Both ADC calibration file hashes remain
+unchanged. Backup /opt/host-monitor-backup-pending-KOjuD6pQ. Pending empty-zero points
+now persist independently across ADC switching/restart; ADC1 one-point anchoring
+preserves its own established slope. Field procedure: Korovki/ADC_FIELD_RUN_2026-09-28.md.
+No real mass calibration performed remotely; disconnected bridge remains invalid.
+Tablet: do not switch/calibrate inside a started COMPONENT. Between completed
+component and next explicit begin is allowed; first load already in body before begin
+is not automatically credited to recipe components. APK/server runtime unchanged.
