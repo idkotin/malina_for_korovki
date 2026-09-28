@@ -521,3 +521,21 @@ No real mass calibration performed remotely; disconnected bridge remains invalid
 Tablet: do not switch/calibrate inside a started COMPONENT. Between completed
 component and next explicit begin is allowed; first load already in body before begin
 is not automatically credited to recipe components. APK/server runtime unchanged.
+
+## NETT sync — 28.09.2026
+User requested physical NETT affect tablet, explicitly NO full/gross weight on its
+screen. Pi now publishes optional tareKg alongside canonical gross weightKg in LAN
+and telemetry; panel persisted tare is calibration-bound. Tablet 0.7.8/code20 shows
+weightKg-tareKg and NETTO label, never gross alongside it. Task baseline/delta/events
+still use canonical gross, so mid-component NETT cannot count as unload or change
+actual component mass. Long NETT clears tare. Server forwards finite tareKg without
+changing canonical weight or timestamp; old packets default to zero display tare.
+93 Pi tests local, Android JVM/release lint/signature, server with-tablet integration,
+32 desktop UI states and hold tests passed. USB device absent; no field button test.
+Server runtime deployed and healthy, signed APK published at /tablet/vi-korm-release.apk
+and /tablet/vi-korm-0.7.8.apk. SHA256 d73ccfd04f0de49737342ad4a141aab6cddee26c5f1909183da85b8419084237.
+Remote update 7bf483d2-8c7e-4480-bf5c-61c81cd1eb0d queued for terminal
+9665af18-81fe-415f-91a0-a6362108c9da; last heartbeat still 0.7.7, installation not confirmed.
+Pi e3d5d26 pushed but NOT deployed yet: 10.8.1.3 SSH handshake timeout (also server
+cannot reach TCP22). User asked to restore connectivity. Do not claim NETT is already
+working on live tablet until BOTH Pi update and tablet20 heartbeat are verified.
